@@ -1,11 +1,11 @@
 "use client"
 
 import { memo } from "react"
-import { Z } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
 import { agentCost } from "./canvas/draw-cost"
 import { SessionTabs } from "./session-tabs"
+import { FloatingPanel } from "./floating-panel"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
@@ -109,57 +109,64 @@ export const TopBar = memo(function TopBar({
   onTogglePanel, onToggleTimeline, onToggleMute,
 }: TopBarProps) {
   return (
-    <div className="absolute top-3 left-3 right-3 flex items-center gap-4 font-mono text-[10px]" style={{ zIndex: Z.info }}>
-      {/* Session tabs — scrollable, takes available space */}
-      {sessions.length > 1 && (
-        <div className="min-w-0 flex-shrink overflow-x-auto scrollbar-hide">
-          <SessionTabs
-            sessions={sessions}
-            selectedSessionId={selectedSessionId}
-            sessionsWithActivity={sessionsWithActivity}
-            onSelectSession={onSelectSession}
-            onCloseSession={onCloseSession}
-          />
-        </div>
-      )}
+    <FloatingPanel
+      id="top-bar"
+      defaultRect={{ x: 12, y: 12, w: 560, h: 80 }}
+      minW={300}
+      minH={44}
+    >
+      <div className="flex items-center gap-4 font-mono text-[10px] px-3 py-2 h-full">
+        {/* Session tabs — scrollable, takes available space */}
+        {sessions.length > 1 && (
+          <div className="min-w-0 flex-shrink overflow-x-auto scrollbar-hide">
+            <SessionTabs
+              sessions={sessions}
+              selectedSessionId={selectedSessionId}
+              sessionsWithActivity={sessionsWithActivity}
+              onSelectSession={onSelectSession}
+              onCloseSession={onCloseSession}
+            />
+          </div>
+        )}
 
-      {/* Spacer pushes info to the right */}
-      <div className="flex-1" />
+        {/* Spacer pushes info to the right */}
+        <div className="flex-1" />
 
-      {/* Right-side info/controls */}
-      <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
-        {isVSCode && <ConnectionIndicator status={connectionStatus} />}
-        <span>{agentCount} agents</span>
-        <span>
-          {formatTokens(totalTokens)} tokens
-          <span style={{ color: COLORS.complete + '65', marginLeft: 4 }}>
-            ~${agentCost(totalTokens).toFixed(2)}
+        {/* Right-side info/controls */}
+        <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
+          {isVSCode && <ConnectionIndicator status={connectionStatus} />}
+          <span>{agentCount} agents</span>
+          <span>
+            {formatTokens(totalTokens)} tokens
+            <span style={{ color: COLORS.complete + '65', marginLeft: 4 }}>
+              ~${agentCost(totalTokens).toFixed(2)}
+            </span>
           </span>
-        </span>
 
-        {/* Mutually exclusive panel group */}
-        <div className="flex items-center gap-1 px-1 py-0.5 rounded" style={{
-          background: COLORS.holoBg03,
-          border: `1px solid ${COLORS.holoBorder06}`,
-        }}>
-          <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>Files</ToggleButton>
-          <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Chat</ToggleButton>
-          <ToggleButton
-            active={showCostOverlay}
-            onClick={() => onTogglePanel('cost')}
-            activeColor={{ bg: COLORS.costActiveBg, text: COLORS.complete }}
-            style={{ background: showCostOverlay ? undefined : 'transparent', border: 'none' }}
-          >
-            $Cost
+          {/* Panel toggle group */}
+          <div className="flex items-center gap-1 px-1 py-0.5 rounded" style={{
+            background: COLORS.holoBg03,
+            border: `1px solid ${COLORS.holoBorder06}`,
+          }}>
+            <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>Files</ToggleButton>
+            <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Chat</ToggleButton>
+            <ToggleButton
+              active={showCostOverlay}
+              onClick={() => onTogglePanel('cost')}
+              activeColor={{ bg: COLORS.costActiveBg, text: COLORS.complete }}
+              style={{ background: showCostOverlay ? undefined : 'transparent', border: 'none' }}
+            >
+              $Cost
+            </ToggleButton>
+          </div>
+
+          {/* Independent toggles */}
+          <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
+          <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
+            {isMuted ? <MutedIcon /> : <UnmutedIcon />}
           </ToggleButton>
         </div>
-
-        {/* Independent toggles */}
-        <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
-        <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
-          {isMuted ? <MutedIcon /> : <UnmutedIcon />}
-        </ToggleButton>
       </div>
-    </div>
+    </FloatingPanel>
   )
 })

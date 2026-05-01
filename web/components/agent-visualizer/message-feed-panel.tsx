@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { Agent, Z, type AgentState } from '@/lib/agent-types'
+import { Agent, type AgentState } from '@/lib/agent-types'
 import { COLORS, ROLE_COLORS, getStateColor } from '@/lib/colors'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { useClickOutside } from '@/hooks/use-click-outside'
 import { useVirtualList } from '@/hooks/use-virtual-list'
+import { FloatingPanel } from './floating-panel'
 
 interface MessageFeedPanelProps {
   conversations: Map<string, ConversationMessage[]>
@@ -190,12 +191,16 @@ export function MessageFeedPanel({
     const preview = latestMessage.content.replace(/\n/g, ' ').slice(0, PREVIEW_MAX)
 
     return (
-      <div
-        className="absolute cursor-pointer transition-all hover:scale-[1.02]"
-        style={{ top: 48, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
-        onClick={() => setExpanded(true)}
+      <FloatingPanel
+        id="message-feed"
+        defaultRect={{ x: 12, y: 108, w: 340, h: 48 }}
+        minW={200}
+        minH={40}
       >
-        <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 320 }}>
+        <div
+          className="cursor-pointer transition-all hover:scale-[1.02] px-3 py-2 flex items-center gap-2"
+          onClick={() => setExpanded(true)}
+        >
           <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} />
           <span className="text-[9px] font-mono font-semibold shrink-0" style={{ color: COLORS.textPrimary }}>
             {agentName.length > COLLAPSED_AGENT_NAME_MAX ? agentName.slice(0, COLLAPSED_AGENT_NAME_MAX) + '..' : agentName}
@@ -205,24 +210,26 @@ export function MessageFeedPanel({
           </span>
           <span className="text-[9px] shrink-0" style={{ color: COLORS.textMuted }}>▾</span>
         </div>
-      </div>
+      </FloatingPanel>
     )
   }
 
   // ── Expanded (virtualized) ──
   return (
-    <div
-      ref={panelRef}
-      className="absolute"
-      style={{ top: 48, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
-      onClick={(e) => e.stopPropagation()}
+    <FloatingPanel
+      id="message-feed"
+      defaultRect={{ x: 12, y: 108, w: 340, h: 420 }}
+      minW={240}
+      minH={120}
+      title="MESSAGES"
     >
-      <div className="glass-card flex flex-col" style={{ width: 320, maxHeight: 420 }}>
-        {/* Header */}
-        <div className="flex items-center justify-between px-3 pt-2 pb-1">
-          <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.textPrimary }}>
-            MESSAGES
-          </span>
+      <div
+        ref={panelRef}
+        className="flex flex-col h-full"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Collapse button */}
+        <div className="flex items-center justify-end px-3 pt-1">
           <button
             onClick={() => setExpanded(false)}
             className="text-[9px] transition-colors"
@@ -264,7 +271,7 @@ export function MessageFeedPanel({
           ref={logRef}
           onScroll={handleScroll}
           className="flex-1 overflow-y-auto px-2 pb-2"
-          style={{ maxHeight: 340, scrollbarWidth: 'thin', scrollbarColor: `${COLORS.scrollbarThumb} transparent` }}
+          style={{ scrollbarWidth: 'thin', scrollbarColor: `${COLORS.scrollbarThumb} transparent` }}
         >
           {messages.length === 0 ? (
             <div className="flex items-center justify-center py-6">
@@ -296,7 +303,7 @@ export function MessageFeedPanel({
           )}
         </div>
       </div>
-    </div>
+    </FloatingPanel>
   )
 }
 

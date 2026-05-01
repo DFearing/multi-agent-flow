@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
-import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
+import { TimelineEvent, TIMING } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
+import { FloatingPanel } from './floating-panel'
 
 interface ControlBarProps {
   isPlaying: boolean
@@ -99,6 +100,16 @@ function LiveControlBar({
   const [pulseOn, setPulseOn] = useState(true)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
 
+  const [defaultRect] = useState(() => {
+    if (typeof window === 'undefined') return { x: 100, y: 700, w: 500, h: 56 }
+    return {
+      x: Math.max(16, (window.innerWidth - 500) / 2),
+      y: window.innerHeight - 72,
+      w: 500,
+      h: 56,
+    }
+  })
+
   useEffect(() => {
     if (isReviewing) return
     const interval = setInterval(() => setPulseOn(p => !p), TIMING.livePulseMs)
@@ -106,11 +117,13 @@ function LiveControlBar({
   }, [isReviewing])
 
   return (
-    <div
-      className="absolute bottom-4 left-4 right-4 mx-auto"
-      style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
+    <FloatingPanel
+      id="control-bar"
+      defaultRect={defaultRect}
+      minW={320}
+      minH={48}
     >
-      <div className="glass-card px-5 py-3 flex items-center gap-3">
+      <div className="px-5 py-3 flex items-center gap-3 h-full">
         {/* LIVE badge */}
         <div className="flex items-center gap-1.5 shrink-0">
           <span
@@ -156,10 +169,10 @@ function LiveControlBar({
             color: COLORS.textPrimary,
           }}
         >
-          ⏸ Review
+          Review
         </button>
       </div>
-    </div>
+    </FloatingPanel>
   )
 }
 
@@ -176,6 +189,16 @@ function ReviewControlBar({
   const [isScrubbing, setIsScrubbing] = useState(false)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
   const progress = totalDuration > 0 ? currentTime / totalDuration : 0
+
+  const [defaultRect] = useState(() => {
+    if (typeof window === 'undefined') return { x: 100, y: 700, w: 600, h: 64 }
+    return {
+      x: Math.max(16, (window.innerWidth - 600) / 2),
+      y: window.innerHeight - 80,
+      w: 600,
+      h: 64,
+    }
+  })
 
   const scrubToClientX = useCallback((clientX: number) => {
     const rect = scrubberRef.current?.getBoundingClientRect()
@@ -197,11 +220,13 @@ function ReviewControlBar({
   }, [isScrubbing, scrubToClientX])
 
   return (
-    <div
-      className="absolute bottom-4 left-4 right-4 mx-auto"
-      style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
+    <FloatingPanel
+      id="control-bar"
+      defaultRect={defaultRect}
+      minW={360}
+      minH={48}
     >
-      <div className="glass-card px-5 py-3 flex items-center gap-3">
+      <div className="px-5 py-3 flex items-center gap-3 h-full">
         {/* Play/Pause */}
         <button
           onClick={onPlayPause}
@@ -213,7 +238,7 @@ function ReviewControlBar({
           }}
         >
           <span style={{ color: COLORS.textPrimary, fontSize: 14, marginLeft: isPlaying ? 0 : 2 }}>
-            {isPlaying ? '⏸' : '▶'}
+            {isPlaying ? '||' : '>'}
           </span>
         </button>
 
@@ -299,7 +324,7 @@ function ReviewControlBar({
               color: COLORS.liveText,
             }}
           >
-            ▶ LIVE
+            LIVE
           </button>
         )}
 
@@ -310,10 +335,10 @@ function ReviewControlBar({
             className="text-sm transition-all shrink-0 hover:scale-110"
             style={{ color: COLORS.textDim }}
           >
-            ⟲
+            R
           </button>
         )}
       </div>
-    </div>
+    </FloatingPanel>
   )
 }

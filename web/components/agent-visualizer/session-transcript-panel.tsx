@@ -1,12 +1,13 @@
 'use client'
 
 import { useRef, useEffect, useState } from 'react'
-import { Z, CARD } from '@/lib/agent-types'
+import { CARD } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
-import { CloseButton, SlidingPanel, stopPropagationHandlers } from './shared-ui'
+import { CloseButton } from './shared-ui'
 import { useVirtualList } from '@/hooks/use-virtual-list'
+import { FloatingPanel } from './floating-panel'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -55,55 +56,52 @@ export function SessionTranscriptPanel({
     autoScroll: true,
   })
 
+  const [defaultRect] = useState(() => {
+    if (typeof window === 'undefined') return { x: 600, y: 48, w: CARD.transcript.width, h: 600 }
+    return {
+      x: window.innerWidth - CARD.transcript.width - 20,
+      y: 48,
+      w: CARD.transcript.width,
+      h: window.innerHeight - 100,
+    }
+  })
+
   if (!visible) return null
 
   return (
-    <SlidingPanel
+    <FloatingPanel
+      id="session-transcript"
+      defaultRect={defaultRect}
+      minW={280}
+      minH={200}
       visible={visible}
-      position={{ right: 0, bottom: 0, top: 36 }}
-      zIndex={Z.transcriptPanel}
-      width={CARD.transcript.width}
-      {...stopPropagationHandlers}
+      title="TRANSCRIPT"
+      onClose={onClose}
     >
-      <div
-        className="h-full flex flex-col"
-        style={{
-          background: COLORS.panelBg,
-          backdropFilter: 'blur(24px)',
-          borderLeft: `1px solid ${COLORS.holoBorder10}`,
-        }}
-      >
-        {/* Header */}
+      <div className="h-full flex flex-col">
+        {/* Sub-header: search + message count */}
         <div
-          className="flex items-center justify-between px-4 py-2.5 flex-shrink-0"
+          className="flex items-center justify-between px-4 py-1.5 flex-shrink-0"
           style={{ borderBottom: `1px solid ${COLORS.holoBorder08}` }}
         >
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono tracking-widest font-semibold" style={{ color: COLORS.panelLabel }}>
-              TRANSCRIPT
-            </span>
-            <span className="text-[9px] font-mono" style={{ color: COLORS.panelLabelDim }}>
-              {searchQuery ? `${filteredConversation.length}/${conversation.length}` : conversation.length} messages
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => { setShowSearch(s => !s); if (showSearch) setSearchQuery('') }}
-              className="text-[9px] font-mono px-1.5 py-0.5 rounded transition-all"
-              style={{
-                background: showSearch ? COLORS.toggleActive : 'transparent',
-                color: showSearch ? COLORS.assistantText : COLORS.textMuted,
-              }}
-            >
-              /
-            </button>
-            <CloseButton onClick={onClose} className="px-1" />
-          </div>
+          <span className="text-[9px] font-mono" style={{ color: COLORS.panelLabelDim }}>
+            {searchQuery ? `${filteredConversation.length}/${conversation.length}` : conversation.length} messages
+          </span>
+          <button
+            onClick={() => { setShowSearch(s => !s); if (showSearch) setSearchQuery('') }}
+            className="text-[9px] font-mono px-1.5 py-0.5 rounded transition-all"
+            style={{
+              background: showSearch ? COLORS.toggleActive : 'transparent',
+              color: showSearch ? COLORS.assistantText : COLORS.textMuted,
+            }}
+          >
+            /
+          </button>
         </div>
 
         {/* Search bar */}
         {showSearch && (
-          <div className="px-3 pb-2 flex-shrink-0" style={{ borderBottom: `1px solid ${COLORS.holoBorder06}` }}>
+          <div className="px-3 pb-2 pt-1 flex-shrink-0" style={{ borderBottom: `1px solid ${COLORS.holoBorder06}` }}>
             <input
               ref={searchRef}
               type="text"
@@ -166,11 +164,11 @@ export function SessionTranscriptPanel({
                 color: COLORS.scrollBtnText,
               }}
             >
-              ↓ New messages
+              New messages
             </button>
           </div>
         )}
       </div>
-    </SlidingPanel>
+    </FloatingPanel>
   )
 }

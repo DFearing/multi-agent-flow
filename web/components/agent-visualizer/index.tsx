@@ -24,9 +24,20 @@ import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
+import { PanelLayoutProvider } from "./panel-layout-provider"
+import { usePanelLayout } from "@/hooks/use-panel-layout"
 
 export function AgentVisualizer() {
+  return (
+    <PanelLayoutProvider>
+      <AgentVisualizerInner />
+    </PanelLayoutProvider>
+  )
+}
+
+function AgentVisualizerInner() {
   const bridge = useVSCodeBridge()
+  const { resetLayout } = usePanelLayout()
 
   const {
     frameRef,
@@ -70,11 +81,11 @@ export function AgentVisualizer() {
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
 
-  // Mutually exclusive panel toggling — opening one closes the others
-  const toggleExclusivePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
-    setShowFileAttention(prev => panel === 'files' ? !prev : false)
-    setShowTranscript(prev => panel === 'transcript' ? !prev : false)
-    setShowCostOverlay(prev => panel === 'cost' ? !prev : false)
+  // Independent panel toggling — each panel can be open simultaneously
+  const togglePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
+    if (panel === 'files') setShowFileAttention(prev => !prev)
+    else if (panel === 'transcript') setShowTranscript(prev => !prev)
+    else if (panel === 'cost') setShowCostOverlay(prev => !prev)
   }, [])
   const [zoomToFitTrigger, setZoomToFitTrigger] = useState(0)
 
@@ -184,12 +195,12 @@ export function AgentVisualizer() {
   // Keyboard shortcuts
   const keyboardActions = useMemo(() => ({
     togglePlayPause: handlePlayPause,
-    toggleFilePanel: () => toggleExclusivePanel('files'),
-    toggleTranscript: () => toggleExclusivePanel('transcript'),
+    toggleFilePanel: () => togglePanel('files'),
+    toggleTranscript: () => togglePanel('transcript'),
     toggleTimeline: () => { setShowTimeline(prev => !prev) },
     toggleHexGrid: () => { setShowHexGrid(prev => !prev) },
     toggleStats: () => { setShowStats(prev => !prev) },
-    toggleCostOverlay: () => toggleExclusivePanel('cost'),
+    toggleCostOverlay: () => togglePanel('cost'),
     zoomToFit: () => { setZoomToFitTrigger(n => n + 1) },
     clearSelection: () => { selection.clearAllSelections() },
     deselectAgent: () => { selection.clearAgent() },
@@ -197,7 +208,7 @@ export function AgentVisualizer() {
     toggleMute: handleToggleMute,
     setSpeed,
     selectedAgentId: selection.selectedAgentId,
-  }), [handlePlayPause, selection.clearAllSelections, selection.clearAgent, selection.selectedAgentId, setSpeed, handleToggleMute, toggleExclusivePanel])
+  }), [handlePlayPause, selection.clearAllSelections, selection.clearAgent, selection.selectedAgentId, setSpeed, handleToggleMute, togglePanel])
 
   useKeyboardShortcuts(keyboardActions)
 
@@ -227,6 +238,7 @@ export function AgentVisualizer() {
       { label: '📊  Toggle Stats', onClick: () => setShowStats(prev => !prev) },
       { label: '⬡  Toggle Grid', onClick: () => setShowHexGrid(prev => !prev) },
       { label: '', onClick: () => {}, separator: true },
+      { label: '⊞  Reset Layout', onClick: resetLayout },
       { label: '⟲  Restart', onClick: restart },
     ]
   ) : []
@@ -289,14 +301,12 @@ export function AgentVisualizer() {
         selectedAgentId={selection.selectedAgentId}
       />
 
-      {/* Agent detail card (floating, tethered to node) */}
+      {/* Agent detail card (floating panel) */}
       {selectedAgent && selection.selectedAgentWorldPos && (
-        <div {...stopPropagationHandlers}>
-          <AgentDetailCard
-            agent={selectedAgent}
-            onClose={selection.clearAgent}
-          />
-        </div>
+        <AgentDetailCard
+          agent={selectedAgent}
+          onClose={selection.clearAgent}
+        />
       )}
 
       {/* Tool call detail popup */}
@@ -405,7 +415,7 @@ export function AgentVisualizer() {
         showCostOverlay={showCostOverlay}
         showTimeline={showTimeline}
         isMuted={isMuted}
-        onTogglePanel={toggleExclusivePanel}
+        onTogglePanel={togglePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}
       />

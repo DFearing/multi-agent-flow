@@ -1,11 +1,12 @@
 'use client'
 
-import { CARD, Z, type AgentState } from '@/lib/agent-types'
-import { COLORS, getStateColor } from '@/lib/colors'
+import { useState } from 'react'
+import { CARD, type AgentState } from '@/lib/agent-types'
+import { COLORS } from '@/lib/colors'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
-import { PanelHeader, SlidingPanel, stopPropagationHandlers } from './shared-ui'
 import { useAutoScroll } from '@/hooks/use-auto-scroll'
+import { FloatingPanel } from './floating-panel'
 
 interface ChatPanelProps {
   visible: boolean
@@ -24,35 +25,33 @@ export function AgentChatPanel({
 }: ChatPanelProps) {
   const { ref: logRef } = useAutoScroll(conversation.length, visible)
 
-  const stateColor = getStateColor(agentState)
+  // Compute default rect on client only
+  const [defaultRect] = useState(() => {
+    if (typeof window === 'undefined') return { x: 800, y: 400, w: CARD.chat.width, h: CARD.chat.maxHeight }
+    return {
+      x: window.innerWidth - CARD.chat.width - 20,
+      y: window.innerHeight - CARD.chat.maxHeight - 80,
+      w: CARD.chat.width,
+      h: CARD.chat.maxHeight,
+    }
+  })
 
   return (
-    <SlidingPanel
+    <FloatingPanel
+      id="agent-chat"
+      defaultRect={defaultRect}
+      minW={220}
+      minH={160}
       visible={visible}
-      position={{ bottom: 64, right: 12 }}
-      zIndex={Z.chatPanel}
-      width={CARD.chat.width}
-      {...stopPropagationHandlers}
+      title={`${agentName.toUpperCase()} - ${agentState}`}
+      onClose={onClose}
     >
-      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: CARD.chat.maxHeight }}>
-        <PanelHeader onClose={onClose} className="mb-2 flex-shrink-0">
-          <div
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ background: stateColor, boxShadow: `0 0 6px ${stateColor}` }}
-          />
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
-            {agentName.toUpperCase()}
-          </span>
-          <span className="text-[9px] font-mono capitalize" style={{ color: stateColor + '90' }}>
-            {agentState}
-          </span>
-        </PanelHeader>
-
+      <div className="flex flex-col h-full p-2">
         {/* Messages */}
         <div
           ref={logRef}
-          className="flex-1 overflow-y-auto space-y-1.5 mb-2"
-          style={{ minHeight: CARD.chat.messagesMinHeight, maxHeight: CARD.chat.messagesMaxHeight }}
+          className="flex-1 overflow-y-auto space-y-1.5"
+          style={{ scrollbarWidth: 'thin', scrollbarColor: `${COLORS.scrollbarThumb} transparent` }}
         >
           {conversation.length === 0 ? (
             <div className="flex items-center justify-center h-full">
@@ -66,8 +65,7 @@ export function AgentChatPanel({
             ))
           )}
         </div>
-
       </div>
-    </SlidingPanel>
+    </FloatingPanel>
   )
 }
