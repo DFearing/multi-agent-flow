@@ -27,3 +27,6 @@ extension/.vscode/
 extension/package-lock.json
 
 .DS_Store
+
+# Local dev server output
+.dev.log
