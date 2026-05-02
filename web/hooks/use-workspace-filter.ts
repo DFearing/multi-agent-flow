@@ -2,17 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-// Default for unseen workspaces is HIDDEN. Auto-mounting every workspace's
-// canvas at page load gets expensive once a few are stored, so users now
-// opt into the workspaces they want to see via the workspace filter UI.
-// Previously-toggled cwds are respected — only entries missing from
-// localStorage default to hidden.
+// Default for unseen workspaces is HIDDEN so a page load that sees a brand
+// new cwd doesn't auto-mount its canvas. Explicit user toggles ARE persisted
+// across reloads, so once a workspace is shown it stays shown.
+//
+// Storage key is versioned: pre-v2 saves used a "visibility" map where the
+// implicit default was `true`. Loading those would re-show every previously
+// seen workspace, which defeats the point — we drop them and start fresh.
 
-const STORAGE_KEY = 'agent-flow:workspace-filter:v1'
+const STORAGE_KEY = 'agent-flow:workspace-filter:v2'
 
 interface Stored {
-  /** Sparse map: missing cwds default to visible. */
+  /** Sparse map: missing cwds default to hidden. */
   visibility: Record<string, boolean>
+  /** All cwds we've ever seen — drives the dropdown population. */
+  knownCwds: string[]
 }
 
 export interface WorkspaceFilterAPI {
@@ -28,15 +32,18 @@ export interface WorkspaceFilterAPI {
 }
 
 function load(): Stored {
-  if (typeof window === 'undefined') return { visibility: {} }
+  if (typeof window === 'undefined') return { visibility: {}, knownCwds: [] }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Stored>
-      return { visibility: parsed.visibility ?? {} }
+      return {
+        visibility: parsed.visibility ?? {},
+        knownCwds: parsed.knownCwds ?? Object.keys(parsed.visibility ?? {}),
+      }
     }
   } catch { /* ignore */ }
-  return { visibility: {} }
+  return { visibility: {}, knownCwds: [] }
 }
 
 function save(stored: Stored) {
@@ -48,19 +55,18 @@ export function useWorkspaceFilter(): WorkspaceFilterAPI {
   const [visibility, setVisibilityState] = useState<Record<string, boolean>>({})
   const [seen, setSeen] = useState<Set<string>>(() => new Set())
 
-  // Seed `seen` from prior storage so the dropdown lists workspaces from
-  // earlier visits even before any session arrives for them on this load.
+  // Seed both visibility and seen from prior storage on mount.
   useEffect(() => {
     const stored = load()
     setVisibilityState(stored.visibility)
-    setSeen(new Set(Object.keys(stored.visibility)))
+    setSeen(new Set(stored.knownCwds))
   }, [])
 
   // Debounced persist
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const scheduleSave = useCallback((vis: Record<string, boolean>) => {
+  const scheduleSave = useCallback((vis: Record<string, boolean>, cwds: Set<string>) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => save({ visibility: vis }), 200)
+    saveTimerRef.current = setTimeout(() => save({ visibility: vis, knownCwds: [...cwds] }), 200)
   }, [])
   useEffect(() => () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
@@ -68,8 +74,18 @@ export function useWorkspaceFilter(): WorkspaceFilterAPI {
 
   const registerCwd = useCallback((cwd: string) => {
     if (!cwd) return
-    setSeen(prev => prev.has(cwd) ? prev : new Set(prev).add(cwd))
-  }, [])
+    setSeen(prev => {
+      if (prev.has(cwd)) return prev
+      const next = new Set(prev).add(cwd)
+      // Persist the membership update — visibility for this cwd stays absent
+      // (= hidden by default) until the user toggles it.
+      setVisibilityState(curVis => {
+        scheduleSave(curVis, next)
+        return curVis
+      })
+      return next
+    })
+  }, [scheduleSave])
 
   const knownWorkspaces = useMemo(() => [...seen].sort(), [seen])
 
@@ -82,31 +98,33 @@ export function useWorkspaceFilter(): WorkspaceFilterAPI {
   const setVisibility = useCallback((cwd: string, visible: boolean) => {
     setVisibilityState(prev => {
       const next = { ...prev, [cwd]: visible }
-      scheduleSave(next)
+      setSeen(curSeen => {
+        const nextSeen = curSeen.has(cwd) ? curSeen : new Set(curSeen).add(cwd)
+        scheduleSave(next, nextSeen)
+        return nextSeen
+      })
       return next
     })
-    setSeen(prev => prev.has(cwd) ? prev : new Set(prev).add(cwd))
   }, [scheduleSave])
 
   const showAll = useCallback(() => {
     setVisibilityState(prev => {
-      const next = { ...prev }
-      for (const cwd of Object.keys(next)) next[cwd] = true
-      scheduleSave(next)
+      const next: Record<string, boolean> = { ...prev }
+      for (const cwd of seen) next[cwd] = true
+      scheduleSave(next, seen)
       return next
     })
-  }, [scheduleSave])
+  }, [scheduleSave, seen])
 
   const isolate = useCallback((target: string) => {
     setVisibilityState(prev => {
       const next: Record<string, boolean> = { ...prev }
-      // Hide everything we know about, show only the target.
-      for (const cwd of Object.keys(next)) next[cwd] = false
+      for (const cwd of seen) next[cwd] = false
       next[target] = true
-      scheduleSave(next)
+      scheduleSave(next, seen)
       return next
     })
-  }, [scheduleSave])
+  }, [scheduleSave, seen])
 
   return { knownWorkspaces, isVisible, setVisibility, showAll, isolate, registerCwd }
 }
