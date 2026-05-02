@@ -21,6 +21,13 @@ import { snapVisualState } from './simulation/snap-visual-state'
 /** ms between React state updates — canvas uses frameRef for smooth 60fps */
 const UI_THROTTLE_MS = 250
 
+/** When more than this many external events arrive in a single animate frame
+ *  (e.g. the bridge's post-warmup backlog flush) we collapse the visual
+ *  side-effects via snapVisualState instead of letting every spawn fade in
+ *  individually. Tunes the line between "small live burst" and "playback
+ *  catch-up". */
+const BATCH_SNAP_THRESHOLD = 20
+
 export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   const { useMockData = true, externalEvents, onExternalEventsConsumed, sessionFilter, sessionFilterRef: externalFilterRef, disable1MContext = false } = options
   const internalFilterRef = useRef(sessionFilter)
@@ -250,6 +257,16 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
       // Sync simulation clock to latest event so active state renders correctly
       newTime = Math.max(newTime, currentState.currentTime)
       maxT = Math.max(maxT, newTime)
+
+      // Auto-snap on a large batch — happens when the bridge flushes its
+      // post-warmup backlog or when SSE replays a long history. Without this
+      // every spawned agent fades in from opacity:0 and every tool call
+      // ejects a particle, all stacked in one frame, which looks chaotic and
+      // wastes a few hundred ms of GPU time. Snapping makes the canvas
+      // settle to the analytically-correct visual state instantly.
+      if (capturedEvents.length > BATCH_SNAP_THRESHOLD) {
+        currentState = snapVisualState(currentState, currentState.currentTime)
+      }
     }
 
     // Append new events to log
