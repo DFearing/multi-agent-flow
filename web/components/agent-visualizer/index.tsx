@@ -5,7 +5,6 @@ import { usePersistedState } from "@/hooks/use-persisted-state"
 import { useSessionSimulation } from "@/hooks/use-session-simulation"
 import { useSimulationManager } from "./simulation-manager-provider"
 import { SimulationManagerProvider } from "./simulation-manager-provider"
-import { useAgentSimulation } from "@/hooks/use-agent-simulation"
 import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
@@ -71,26 +70,27 @@ function AgentVisualizerInner() {
   // selection-related panels (chat, transcript, file attention, timeline)
   // have data — without running a duplicate event pipeline.
   //
-  // In mock/demo mode (no live sessions), we fall back to the old
-  // useAgentSimulation which plays through MOCK_SCENARIO.
+  // In mock/demo mode, we register a '__mock__' session with useMockData
+  // on the shared manager — no separate useAgentSimulation needed.
   const manager = useSimulationManager()
 
   // Selected session's simulation state (from the shared manager).
   // No externalEvents here — SessionCanvasPanel pushes events for each
   // session independently. This hook is a read-only subscription.
   const selectedSessionId = bridge.selectedSessionId ?? '__mock__'
-  const selectedSim = useSessionSimulation(manager, selectedSessionId)
-
-  // Keep the old useAgentSimulation for mock/demo mode only.
-  const mockSim = useAgentSimulation({
-    useMockData: bridge.useMockData,
-    externalEvents: undefined,
-    onExternalEventsConsumed: undefined,
+  const sim = useSessionSimulation(manager, selectedSessionId, {
     disable1MContext: bridge.disable1MContext,
   })
 
-  // Pick the right simulation source based on mode.
-  const sim = bridge.useMockData ? mockSim : selectedSim
+  // Ensure the mock session is registered with useMockData when in demo mode.
+  useEffect(() => {
+    if (bridge.useMockData && !manager.hasSession('__mock__')) {
+      manager.addSession('__mock__', {
+        useMockData: true,
+        disable1MContext: bridge.disable1MContext,
+      })
+    }
+  }, [bridge.useMockData, bridge.disable1MContext, manager])
   const {
     agents,
     toolCalls,

@@ -76,6 +76,8 @@ interface SessionSubState {
   pendingEvents: SimulationEvent[]
   /** Disable 1M context window. */
   disable1MContext: boolean
+  /** When true, drive this session from MOCK_SCENARIO (time-based). */
+  useMockData: boolean
 }
 
 // ── Listener type ──────────────────────────────────────────────────────────
@@ -90,7 +92,7 @@ export type RenderCallback = (timestamp: number) => void
 export interface SimulationManager {
   // ── Session lifecycle ───────────────────────────────────────────────────
   /** Register a new session. If it already exists, this is a no-op. */
-  addSession(sessionId: string, opts?: { disable1MContext?: boolean }): void
+  addSession(sessionId: string, opts?: { disable1MContext?: boolean; useMockData?: boolean }): void
   /** Remove a session and clean up its state. */
   removeSession(sessionId: string): void
   /** Check whether a session is registered. */
@@ -328,6 +330,21 @@ export function createSimulationManager(): SimulationManager {
     let hadNewEvents = false
     const ingestStart = performance.now()
 
+    // ── Mock-scenario time-based playback ─────────────────────────────
+    if (sub.useMockData) {
+      while (
+        newEventIndex < MOCK_SCENARIO.length &&
+        MOCK_SCENARIO[newEventIndex].time <= newTime
+      ) {
+        if (performance.now() - ingestStart > INGEST_BUDGET_MS) break
+        const evt = MOCK_SCENARIO[newEventIndex]
+        currentState = processEventForSession(evt, currentState, sub)
+        currentState.eventLog.push(evt)
+        hadNewEvents = true
+        newEventIndex++
+      }
+    }
+
     // Process deferred events from the previous frame first.
     if (sub.deferredEvents.length > 0) {
       const deferred = sub.deferredEvents
@@ -379,9 +396,11 @@ export function createSimulationManager(): SimulationManager {
     currentState = { ...currentState, eventIndex: newEventIndex }
 
     const result = computeNextFrame(prev, deltaTime, newTime, maxT, currentState, {
-      useMockData: false,
-      mockScenarioLength: 0,
-      mockScenarioEndTime: 0,
+      useMockData: sub.useMockData,
+      mockScenarioLength: sub.useMockData ? MOCK_SCENARIO.length : 0,
+      mockScenarioEndTime: sub.useMockData && MOCK_SCENARIO.length > 0
+        ? MOCK_SCENARIO[MOCK_SCENARIO.length - 1].time
+        : 0,
     })
 
     sub.frameState = result
@@ -448,7 +467,7 @@ export function createSimulationManager(): SimulationManager {
 
   // ── Public API ──────────────────────────────────────────────────────────
 
-  function createSubState(opts?: { disable1MContext?: boolean }): SessionSubState {
+  function createSubState(opts?: { disable1MContext?: boolean; useMockData?: boolean }): SessionSubState {
     return {
       frameState: createEmptyState({ isPlaying: true }),
       physics: createPhysicsState(),
@@ -460,6 +479,7 @@ export function createSimulationManager(): SimulationManager {
       skipForceSync: false,
       pendingEvents: [],
       disable1MContext: opts?.disable1MContext ?? false,
+      useMockData: opts?.useMockData ?? false,
     }
   }
 
@@ -525,7 +545,7 @@ export function createSimulationManager(): SimulationManager {
 
       sub.positions.clear()
       const prev = sub.frameState
-      const events = prev.eventLog.toArray()
+      const events = sub.useMockData ? MOCK_SCENARIO : prev.eventLog.toArray()
 
       let replayState = createEmptyState({
         speed: prev.speed,
