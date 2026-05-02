@@ -7,7 +7,7 @@ import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { SessionCanvasPanel } from "./session-canvas-panel"
-import { SessionStatsProvider, useSessionStatsData } from "./session-stats-provider"
+import { SessionStatsProvider } from "./session-stats-provider"
 import { CostSummaryPanel } from "./cost-summary-panel"
 import { SessionNamesProvider } from "@/hooks/use-session-names"
 import { useWorkspaceFilter } from "@/hooks/use-workspace-filter"
@@ -326,48 +326,10 @@ function AgentVisualizerInner() {
     [bridge.sessions, workspaceFilter, hiddenCanvasesSet],
   )
 
-  // Keys are `${sessionId}:${agentId}` to disambiguate same-named agents
-  // (e.g. two "orchestrator"s) across sessions.
-  const perSession = useSessionStatsData()
   const visibleSessionIds = useMemo(
     () => new Set(visibleSessions.map(s => s.id)),
     [visibleSessions],
   )
-
-  const feedConversations = useMemo(() => {
-    const fc = new Map<string, ConversationMessage[]>()
-    for (const [sid, stats] of perSession) {
-      if (!visibleSessionIds.has(sid)) continue
-      for (const [agentId, msgs] of stats.conversations) {
-        fc.set(`${sid}:${agentId}`, msgs)
-      }
-    }
-    return fc
-  }, [perSession, visibleSessionIds])
-
-  const feedAgents = useMemo(() => {
-    const fa = new Map<string, Agent>()
-    for (const [sid, stats] of perSession) {
-      if (!visibleSessionIds.has(sid)) continue
-      for (const [agentId, ag] of stats.agents) {
-        fa.set(`${sid}:${agentId}`, ag)
-      }
-    }
-    return fa
-  }, [perSession, visibleSessionIds])
-
-  const agentToSession = useMemo(() => {
-    const a2s = new Map<string, string>()
-    for (const [sid, stats] of perSession) {
-      if (!visibleSessionIds.has(sid)) continue
-      for (const [agentId] of stats.agents) {
-        a2s.set(`${sid}:${agentId}`, sid)
-      }
-    }
-    return a2s
-    // TODO: Per-session caching — track individual session Map references to
-    // avoid rebuilding entries for sessions that haven't changed.
-  }, [perSession, visibleSessionIds])
 
   // Slot assignment: each live session gets the lowest unused slot, stable for
   // the lifetime of this page load. Slot rects persist in localStorage as
@@ -465,9 +427,7 @@ function AgentVisualizerInner() {
        *  closed. */}
       {showMessageFeed && (
         <MessageFeedPanel
-          conversations={feedConversations}
-          agents={feedAgents}
-          agentToSession={agentToSession}
+          visibleSessionIds={visibleSessionIds}
           onAgentClick={selection.handleAgentClick}
           selectedAgentId={selection.selectedAgentId}
           onClose={() => setShowMessageFeed(false)}
