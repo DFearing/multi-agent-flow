@@ -16,7 +16,7 @@
  * Bloom post-processing is applied per-viewport as a stage-level filter.
  */
 
-import { useRef, useEffect, useState, useCallback, useMemo, useId } from 'react'
+import { useRef, useEffect, useState, useMemo, useId } from 'react'
 import { Container, EventBoundary } from 'pixi.js'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
@@ -32,7 +32,6 @@ import {
   resizeViewport,
   renderViewport,
   setViewportBoundaryRoot,
-  disposeTextureCache,
 } from './pixi-app'
 import type { Viewport } from './pixi-app'
 import { BackgroundLayer } from './background-layer'
@@ -217,9 +216,11 @@ export function PixiCanvas({
   updateDragLerpRef.current = updateDragLerp
 
   // ─── Draw callback (registered with shared render loop) ─────────────
+  // The render-loop registration reads through drawRef.current, so identity
+  // stability isn't observed downstream — useCallback would be pure overhead.
   const drawRef = useRef<(timestamp: number) => void>(() => {})
 
-  const pixiDraw = useCallback((timestamp: number) => {
+  const pixiDraw = (timestamp: number) => {
     if (!readyRef.current) return
 
     // Skip rendering when the canvas is off-screen (IntersectionObserver).
@@ -302,8 +303,7 @@ export function PixiCanvas({
 
     // Render this viewport via the shared renderer and blit to the visible canvas
     renderViewport(viewportId)
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- layer refs are stable; hook refs kept in sync above
-  }, [simulationRef, transformRef, showHexGrid, selectedToolCallId, selectedDiscoveryId, selectedAgentId, hoveredAgentId, showStats, viewportId])
+  }
 
   drawRef.current = pixiDraw
 
@@ -321,6 +321,11 @@ export function PixiCanvas({
     if (!el || !canvas) return
 
     let destroyed = false
+    // Set true once boot passes the destroyed-check; from that point on
+    // cleanup owns the matching releaseSharedRenderer() call. If cleanup
+    // runs while acquired is still false, boot's own destroyed-check
+    // releases — preventing a double-release on the refCount.
+    let acquired = false
 
     const boot = async () => {
       // Acquire the shared renderer (creates the GL context on first call)
@@ -330,6 +335,8 @@ export function PixiCanvas({
         releaseSharedRenderer()
         return
       }
+
+      acquired = true
 
       // Register this component as a viewport
       const viewport = registerViewport(viewportId)
@@ -422,11 +429,12 @@ export function PixiCanvas({
       worldRef.current = null
       viewportRef.current = null
 
-      deregisterViewport(viewportId)
-
-      // Release shared renderer (may destroy GL context if last viewport)
-      releaseSharedRenderer()
-      disposeTextureCache()
+      // Only deregister + release if boot reached the post-acquire phase.
+      // Otherwise boot's own destroyed-check releases.
+      if (acquired) {
+        deregisterViewport(viewportId)
+        releaseSharedRenderer()
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once
   }, [viewportId])

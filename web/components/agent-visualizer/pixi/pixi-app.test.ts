@@ -9,13 +9,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { ApplicationOptions } from 'pixi.js'
 
 // ─── Mock pixi.js ────────────────────────────────────────────────────────
 
 const origCreateElement = document.createElement.bind(document)
 
 let appInstanceCount = 0
-let lastInitOpts: Record<string, unknown> | null = null
+let lastInitOpts: Partial<ApplicationOptions> | null = null
 
 vi.mock('pixi.js', () => {
   class MockContainer {
@@ -66,7 +67,7 @@ vi.mock('pixi.js', () => {
       appInstanceCount++
     }
 
-    async init(opts: Record<string, unknown>) {
+    async init(opts: Partial<ApplicationOptions>) {
       lastInitOpts = opts
     }
 

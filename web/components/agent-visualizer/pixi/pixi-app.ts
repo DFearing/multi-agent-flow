@@ -19,7 +19,7 @@
  * calls sharedRenderer.renderViewport() for its viewport id.
  */
 
-import { Application, Container, EventBoundary, Texture } from 'pixi.js'
+import { Application, Container, EventBoundary, Texture, type WebGLRenderer } from 'pixi.js'
 
 // ─── Viewport registry ─────────────────────────────────────────────────────
 
@@ -40,7 +40,7 @@ export interface Viewport {
 
 /** Singleton state for the shared renderer. */
 interface SharedRendererState {
-  app: Application
+  app: Application<WebGLRenderer>
   viewports: Map<string, Viewport>
   /** Reference count — destroy the app when it drops to 0. */
   refCount: number
@@ -59,14 +59,14 @@ let shared: SharedRendererState | null = null
  * Call `releaseSharedRenderer()` on teardown — when refCount hits 0
  * the Application is destroyed.
  */
-export async function acquireSharedRenderer(): Promise<Application> {
+export async function acquireSharedRenderer(): Promise<Application<WebGLRenderer>> {
   if (shared) {
     shared.refCount++
     if (shared.initPromise) await shared.initPromise
     return shared.app
   }
 
-  const app = new Application()
+  const app = new Application<WebGLRenderer>()
 
   const state: SharedRendererState = {
     app,
@@ -84,6 +84,7 @@ export async function acquireSharedRenderer(): Promise<Application> {
     autoDensity: true,
     preference: 'webgl',
     multiView: true,
+    autoStart: false,
     width: 1,
     height: 1,
   }).then(() => {
@@ -107,6 +108,7 @@ export function releaseSharedRenderer(): void {
       vp.stage.destroy({ children: true })
     }
     shared.viewports.clear()
+    disposeTextureCache()
     shared.app.destroy(true)
     shared = null
   }
@@ -262,7 +264,8 @@ export function getGlowTexture(
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
-  const ctx = canvas.getContext('2d')!
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('getGlowTexture: 2D context unavailable')
   const grad = ctx.createRadialGradient(rQ, rQ, 0, rQ, rQ, rQ)
   const innerHex = innerAlpha.toString(16).padStart(2, '0')
   const outerHex = outerAlpha.toString(16).padStart(2, '0')
@@ -292,7 +295,8 @@ export function getCircleTexture(radius: number): Texture {
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
-  const ctx = canvas.getContext('2d')!
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('getCircleTexture: 2D context unavailable')
   ctx.beginPath()
   ctx.arc(rQ, rQ, rQ, 0, Math.PI * 2)
   ctx.fillStyle = '#ffffff'
