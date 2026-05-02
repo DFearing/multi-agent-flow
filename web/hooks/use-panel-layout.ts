@@ -41,6 +41,11 @@ export interface PanelLayoutAPI {
   hasSavedLayout(): boolean
   sendPanelToNext(id: PanelId): string | null
   sendPanelToPrev(id: PanelId): string | null
+  /** Tile every visible non-top-bar panel into equal slices of the area
+   *  below the top bar. `axis: 'vertical'` stacks them top-to-bottom (full
+   *  width each); `axis: 'horizontal'` lays them side-by-side (full height
+   *  each). Hidden panels and the top-bar itself are skipped. */
+  tilePanels(axis: 'horizontal' | 'vertical'): void
   /** Other live session ids paired with this window (host and/or attachers). */
   otherInstances: string[]
   /** This window's own session id. */
@@ -488,10 +493,75 @@ export function usePanelLayoutState(): PanelLayoutAPI {
   const sendPanelToNext = useCallback((id: PanelId) => sendPanelInDirection(id, 1), [sendPanelInDirection])
   const sendPanelToPrev = useCallback((id: PanelId) => sendPanelInDirection(id, -1), [sendPanelInDirection])
 
+  const tilePanels = useCallback((axis: 'horizontal' | 'vertical') => {
+    if (typeof window === 'undefined') return
+    setPanels(prev => {
+      const candidates: PanelId[] = []
+      for (const key of Object.keys(prev) as PanelId[]) {
+        if (key === 'top-bar') continue
+        const r = prev[key]
+        if (!r || r.hidden || r.w <= 0 || r.h <= 0) continue
+        candidates.push(key)
+      }
+      if (candidates.length === 0) return prev
+
+      // Stable, intuitive order: sort by current top-left in the tiling axis,
+      // so the panel currently leftmost stays leftmost (horizontal) or
+      // topmost stays topmost (vertical).
+      candidates.sort((a, b) => {
+        const ra = prev[a]!, rb = prev[b]!
+        return axis === 'horizontal' ? ra.x - rb.x : ra.y - rb.y
+      })
+
+      const topBar = prev['top-bar']
+      const topBarBottom = topBar && !topBar.hidden ? topBar.y + topBar.h : 0
+      const margin = 12
+      const gap = 8
+      const availX = margin
+      const availY = topBarBottom + margin
+      const availW = Math.max(100, window.innerWidth - margin * 2)
+      const availH = Math.max(100, window.innerHeight - availY - margin)
+
+      const next: PanelLayoutMap = { ...prev }
+      const n = candidates.length
+      if (axis === 'horizontal') {
+        const totalGap = gap * (n - 1)
+        const slice = Math.floor((availW - totalGap) / n)
+        candidates.forEach((id, i) => {
+          const base = prev[id]!
+          next[id] = {
+            ...base,
+            x: availX + i * (slice + gap),
+            y: availY,
+            w: slice,
+            h: availH,
+            hidden: false,
+          }
+        })
+      } else {
+        const totalGap = gap * (n - 1)
+        const slice = Math.floor((availH - totalGap) / n)
+        candidates.forEach((id, i) => {
+          const base = prev[id]!
+          next[id] = {
+            ...base,
+            x: availX,
+            y: availY + i * (slice + gap),
+            w: availW,
+            h: slice,
+            hidden: false,
+          }
+        })
+      }
+      scheduleSave(next)
+      return next
+    })
+  }, [scheduleSave])
+
   return {
     getPanelRect, setPanelRect, bringToFront,
     resetLayout, saveLayout, hardResetLayout, hasSavedLayout,
-    sendPanelToNext, sendPanelToPrev, otherInstances, instanceId: INSTANCE_ID,
+    sendPanelToNext, sendPanelToPrev, tilePanels, otherInstances, instanceId: INSTANCE_ID,
     isFreshInstance: IS_FRESH_INSTANCE,
     hostId: HOST_ID,
     hostNotFound,

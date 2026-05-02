@@ -13,6 +13,26 @@ import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
 
+// Tile-layout icons — three horizontal bars / three vertical bars.
+function TileVerticalIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <rect x="2" y="2"  width="10" height="2.5" rx="0.5" />
+      <rect x="2" y="5.75" width="10" height="2.5" rx="0.5" />
+      <rect x="2" y="9.5"  width="10" height="2.5" rx="0.5" />
+    </svg>
+  )
+}
+function TileHorizontalIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <rect x="2"   y="2" width="2.5" height="10" rx="0.5" />
+      <rect x="5.75" y="2" width="2.5" height="10" rx="0.5" />
+      <rect x="9.5"  y="2" width="2.5" height="10" rx="0.5" />
+    </svg>
+  )
+}
+
 function MutedIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -130,7 +150,7 @@ export const TopBar = memo(function TopBar({
   workspaceFilter,
   onTogglePanel, onToggleTimeline, onToggleMute, onUiClick,
 }: TopBarProps) {
-  const { resetLayout, saveLayout, hardResetLayout, instanceId, hostId, otherInstances } = usePanelLayout()
+  const { resetLayout, saveLayout, hardResetLayout, tilePanels, instanceId, hostId, otherInstances } = usePanelLayout()
   const resetClickRef = useRef(0)
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleReset = () => {
@@ -233,6 +253,26 @@ export const TopBar = memo(function TopBar({
             sessions={allSessions}
             onRemoveSession={onRemoveSession}
           />
+          <div className="flex items-center gap-1">
+            <ToggleButton
+              active={false}
+              onClick={() => { onUiClick?.('save'); tilePanels('vertical') }}
+              style={{ padding: '6px 8px' }}
+            >
+              <span title="Tile open windows vertically (stacked)" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                <TileVerticalIcon />
+              </span>
+            </ToggleButton>
+            <ToggleButton
+              active={false}
+              onClick={() => { onUiClick?.('save'); tilePanels('horizontal') }}
+              style={{ padding: '6px 8px' }}
+            >
+              <span title="Tile open windows horizontally (side by side)" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                <TileHorizontalIcon />
+              </span>
+            </ToggleButton>
+          </div>
           <ToggleButton active={false} onClick={() => { onUiClick?.('save'); saveLayout() }}>Save UI</ToggleButton>
           <ToggleButton active={false} onClick={() => { onUiClick?.('reset'); handleReset() }}>Reset UI</ToggleButton>
         </div>
