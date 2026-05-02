@@ -2,6 +2,7 @@ import { Agent, Discovery } from '@/lib/agent-types'
 import { COLORS, getDiscoveryTypeColor } from '@/lib/colors'
 import { getDiscoveryCardDimensions } from '@/lib/canvas-constants'
 import { truncateText } from './draw-misc'
+import { getTextSprite, drawTextSprite } from './render-cache'
 import { type ViewBounds, isPointVisible, isRectVisible } from './viewport'
 
 export function drawDiscoveryConnections(
@@ -77,16 +78,16 @@ export function drawDiscoveries(
       ctx.stroke()
     }
 
-    ctx.fillStyle = typeColor
     ctx.font = 'bold 8px monospace'
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'top'
-    ctx.fillText(truncateText(ctx, disc.label, cardW - 10), cardX + 6, cardY + 3)
+    const discLabel = truncateText(ctx, disc.label, cardW - 10)
+    const labelSp = getTextSprite(discLabel, 'bold 8px monospace', typeColor, 'left', 'top')
+    drawTextSprite(ctx, labelSp, cardX + 6, cardY + 3, 'left', 'top')
 
-    ctx.fillStyle = COLORS.textMuted
     ctx.font = '7px monospace'
     for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(truncateText(ctx, lines[i], cardW - 10), cardX + 6, cardY + 14 + i * 11)
+      const lineText = truncateText(ctx, lines[i], cardW - 10)
+      const lineSp = getTextSprite(lineText, '7px monospace', COLORS.textMuted, 'left', 'top')
+      drawTextSprite(ctx, lineSp, cardX + 6, cardY + 14 + i * 11, 'left', 'top')
     }
 
     ctx.restore()

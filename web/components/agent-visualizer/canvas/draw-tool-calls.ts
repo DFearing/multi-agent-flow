@@ -2,7 +2,7 @@ import { ToolCallNode } from '@/lib/agent-types'
 import { COLORS, withAlpha } from '@/lib/colors'
 import { TOOL_MAX_CARD_W, TOOL_DRAW } from '@/lib/canvas-constants'
 import { truncateText } from './draw-misc'
-import { measureTextCached } from './render-cache'
+import { measureTextCached, getTextSprite, drawTextSprite } from './render-cache'
 import { type ViewBounds, isRectVisible } from './viewport'
 
 export function drawToolCalls(
@@ -93,23 +93,24 @@ export function drawToolCalls(
     ctx.textBaseline = 'middle'
 
     if (isRunning) {
-      ctx.fillStyle = COLORS.tool
-      ctx.fillText(truncatedLabel, tool.x, tool.y)
+      const sp = getTextSprite(truncatedLabel, `${TOOL_DRAW.fontSize}px monospace`, COLORS.tool, 'center', 'middle')
+      drawTextSprite(ctx, sp, tool.x, tool.y, 'center', 'middle')
     } else if (isError) {
-      ctx.fillStyle = COLORS.error
-      ctx.fillText(truncateText(ctx, `${tool.toolName}: FAILED`, cardW - 8), tool.x, tool.y - TOOL_DRAW.twoLineOffset)
+      const errLabel = truncateText(ctx, `${tool.toolName}: FAILED`, cardW - 8)
+      const sp1 = getTextSprite(errLabel, `${TOOL_DRAW.fontSize}px monospace`, COLORS.error, 'center', 'middle')
+      drawTextSprite(ctx, sp1, tool.x, tool.y - TOOL_DRAW.twoLineOffset, 'center', 'middle')
       ctx.font = `${TOOL_DRAW.errorFontSize}px monospace`
-      ctx.fillStyle = COLORS.error + 'aa'
-      ctx.fillText(truncateText(ctx, tool.errorMessage || tool.result || '', cardW - 8), tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
+      const errDetail = truncateText(ctx, tool.errorMessage || tool.result || '', cardW - 8)
+      const sp2 = getTextSprite(errDetail, `${TOOL_DRAW.errorFontSize}px monospace`, COLORS.error + 'aa', 'center', 'middle')
+      drawTextSprite(ctx, sp2, tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2, 'center', 'middle')
     } else {
       // Completed card: show action + file path (most useful info at a glance)
-      ctx.fillStyle = COLORS.return
-      ctx.fillText(truncatedLabel, tool.x, tool.y - TOOL_DRAW.twoLineOffset)
+      const sp = getTextSprite(truncatedLabel, `${TOOL_DRAW.fontSize}px monospace`, COLORS.return, 'center', 'middle')
+      drawTextSprite(ctx, sp, tool.x, tool.y - TOOL_DRAW.twoLineOffset, 'center', 'middle')
       if (tool.tokenCost) {
         // Token cost as dim text below
-        ctx.fillStyle = COLORS.tool + '90'
-        ctx.font = `${TOOL_DRAW.tokenFontSize}px monospace`
-        ctx.fillText(`${tool.tokenCost} tok`, tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
+        const tokSp = getTextSprite(`${tool.tokenCost} tok`, `${TOOL_DRAW.tokenFontSize}px monospace`, COLORS.tool + '90', 'center', 'middle')
+        drawTextSprite(ctx, tokSp, tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2, 'center', 'middle')
       }
     }
 

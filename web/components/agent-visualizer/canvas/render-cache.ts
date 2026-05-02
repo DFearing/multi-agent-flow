@@ -110,3 +110,288 @@ export function measureTextCached(ctx: CanvasRenderingContext2D, text: string): 
   textWidthCache.set(key, w)
   return w
 }
+
+// ─── Text sprite (glyph) cache ────────────────────────────────────────────
+// Pre-renders short text strings into off-screen canvases so hot-path
+// fillText calls become cheap drawImage blits. LRU-evicted to bound memory.
+//
+// The cache is DPR-aware: sprites are rendered at `dpr` scale so they remain
+// crisp on high-DPI screens. Callers draw them with inverse-DPR scaling so
+// the logical size matches the original fillText.
+
+interface TextSprite {
+  canvas: HTMLCanvasElement
+  /** Logical width (CSS px) */
+  width: number
+  /** Logical height (CSS px) */
+  height: number
+  /** DPR used when this sprite was rendered */
+  dpr: number
+  /** Monotonic access counter for LRU eviction */
+  lastAccess: number
+}
+
+const textSpriteCache = new Map<string, TextSprite>()
+const TEXT_SPRITE_MAX = 256
+const TEXT_SPRITE_EVICT_BATCH = 32
+let textSpriteAccessCounter = 0
+
+/**
+ * Get a cached off-screen canvas containing pre-rendered text.
+ *
+ * @param text   The string to render
+ * @param font   CSS font string (e.g. "10px monospace", "bold 9px monospace")
+ * @param color  CSS fill color
+ * @param align  Text alignment used in the source context (default "left").
+ *               When "center", the sprite is rendered with the anchor at its
+ *               center so callers can blit at (x - width/2, y).
+ * @param baseline Text baseline (default "top")
+ * @param dpr    Device pixel ratio (defaults to window.devicePixelRatio).
+ *                If DPR changes at runtime (e.g. window moved between monitors),
+ *                new sprites are created at the new DPR; stale ones evict via LRU.
+ */
+export function getTextSprite(
+  text: string,
+  font: string,
+  color: string,
+  align: CanvasTextAlign = 'left',
+  baseline: CanvasTextBaseline = 'top',
+  dpr: number = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
+): TextSprite {
+  const key = `${text}|${font}|${color}|${align}|${baseline}|${dpr}`
+  const cached = textSpriteCache.get(key)
+  if (cached) {
+    cached.lastAccess = ++textSpriteAccessCounter
+    return cached
+  }
+
+  // Measure text to determine canvas size
+  const measure = document.createElement('canvas')
+  measure.width = 1
+  measure.height = 1
+  const mCtx = measure.getContext('2d')!
+  mCtx.font = font
+  const metrics = mCtx.measureText(text)
+
+  // Compute logical dimensions with padding for descenders/ascenders
+  const fontSizeMatch = font.match(/(\d+(?:\.\d+)?)px/)
+  const fontSize = fontSizeMatch ? parseFloat(fontSizeMatch[1]) : 10
+  const logicalW = Math.ceil(metrics.width) + 2 // 1px padding each side
+  const logicalH = Math.ceil(fontSize * 1.5) + 2
+
+  // Create the sprite canvas at DPR resolution
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.ceil(logicalW * dpr)
+  canvas.height = Math.ceil(logicalH * dpr)
+  const ctx = canvas.getContext('2d')!
+  ctx.scale(dpr, dpr)
+
+  ctx.font = font
+  ctx.fillStyle = color
+  ctx.textBaseline = baseline === 'middle' ? 'middle' : 'top'
+
+  const drawY = baseline === 'middle' ? logicalH / 2 : 1
+  const drawX = 1 // 1px left padding
+
+  ctx.fillText(text, drawX, drawY)
+
+  const sprite: TextSprite = {
+    canvas,
+    width: logicalW,
+    height: logicalH,
+    dpr,
+    lastAccess: ++textSpriteAccessCounter,
+  }
+
+  // Evict oldest entries if at capacity
+  if (textSpriteCache.size >= TEXT_SPRITE_MAX) {
+    // Collect entries, sort by lastAccess, remove oldest batch
+    const entries = Array.from(textSpriteCache.entries())
+    entries.sort((a, b) => a[1].lastAccess - b[1].lastAccess)
+    for (let i = 0; i < TEXT_SPRITE_EVICT_BATCH && i < entries.length; i++) {
+      textSpriteCache.delete(entries[i][0])
+    }
+  }
+
+  textSpriteCache.set(key, sprite)
+  return sprite
+}
+
+/**
+ * Draw a cached text sprite. Replaces ctx.fillText() in hot paths.
+ *
+ * The sprite was rendered at `dpr` scale; this function applies inverse
+ * scaling so the logical size matches the original fillText output.
+ *
+ * @param ctx    Target rendering context
+ * @param sprite Cached text sprite from getTextSprite()
+ * @param x      Logical x position
+ * @param y      Logical y position
+ * @param align  How to interpret x: "left" = left edge, "center" = center
+ * @param baseline How to interpret y: "top" = top edge, "middle" = center
+ */
+export function drawTextSprite(
+  ctx: CanvasRenderingContext2D,
+  sprite: TextSprite,
+  x: number,
+  y: number,
+  align: CanvasTextAlign = 'left',
+  baseline: CanvasTextBaseline = 'top',
+): void {
+  const drawX = align === 'center' ? x - sprite.width / 2
+    : align === 'right' ? x - sprite.width
+    : x
+  const drawY = baseline === 'middle' ? y - sprite.height / 2
+    : baseline === 'bottom' ? y - sprite.height
+    : y
+
+  // The sprite canvas is at dpr resolution. We need to blit it at logical
+  // size, so we draw the full canvas into a logicalW x logicalH rect.
+  ctx.drawImage(
+    sprite.canvas,
+    Math.round(drawX) - 1, // offset for the 1px padding in the sprite
+    Math.round(drawY),
+    sprite.width,
+    sprite.height,
+  )
+}
+
+// ─── Per-agent overlay composite cache ────────────────────────────────────
+// Caches the full stats overlay or cost label (box + text) per agent into an
+// off-screen canvas keyed by (agentId, dataHash). When data is unchanged
+// between frames, we just drawImage the cached overlay.
+//
+// Cache keys use a NUL (\0) delimiter between prefix and agentId so that
+// pruning can extract the agentId exactly, regardless of what characters
+// (including hyphens) the agentId contains.
+
+/** Separator between prefix and agentId in overlay cache keys. NUL cannot
+ *  appear in agent IDs (which are typically UUIDs or user-facing strings). */
+const OVERLAY_KEY_SEP = '\0'
+
+/**
+ * Build a deterministic overlay cache key from a prefix and agent id.
+ * Exported for use by callers and tests.
+ */
+export function overlayKey(prefix: string, agentId: string): string {
+  return prefix + OVERLAY_KEY_SEP + agentId
+}
+
+/**
+ * Extract the agentId from an overlay cache key. Returns `undefined` if the
+ * key doesn't contain the separator (defensive).
+ */
+function agentIdFromOverlayKey(key: string): string | undefined {
+  const idx = key.indexOf(OVERLAY_KEY_SEP)
+  return idx >= 0 ? key.slice(idx + 1) : undefined
+}
+
+interface OverlaySprite {
+  canvas: HTMLCanvasElement
+  /** Logical width */
+  width: number
+  /** Logical height */
+  height: number
+  /** DPR used when rendered */
+  dpr: number
+  /** Hash of the data that was rendered (for invalidation) */
+  dataHash: string
+}
+
+const overlayCache = new Map<string, OverlaySprite>()
+
+/**
+ * Get or create a cached overlay sprite for an agent.
+ *
+ * @param cacheKey Cache key built via `overlayKey(prefix, agentId)`.
+ * @param dataHash String encoding the data values (e.g. toolCalls, timeAlive).
+ *                 When this changes, the cache entry is invalidated.
+ * @param width    Logical width of the overlay
+ * @param height   Logical height of the overlay
+ * @param dpr      Device pixel ratio (defaults to window.devicePixelRatio)
+ * @param render   Callback to render the overlay into the provided context.
+ *                 The context is already scaled by dpr. Draw at logical coords.
+ */
+export function getOverlaySprite(
+  cacheKey: string,
+  dataHash: string,
+  width: number,
+  height: number,
+  dpr: number = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
+  render: (ctx: CanvasRenderingContext2D) => void,
+): OverlaySprite {
+  const existing = overlayCache.get(cacheKey)
+  if (existing && existing.dataHash === dataHash && existing.dpr === dpr) {
+    return existing
+  }
+
+  const canvas = existing?.canvas ?? document.createElement('canvas')
+  const pxW = Math.ceil(width * dpr)
+  const pxH = Math.ceil(height * dpr)
+
+  if (canvas.width !== pxW || canvas.height !== pxH) {
+    canvas.width = pxW
+    canvas.height = pxH
+  }
+
+  const ctx = canvas.getContext('2d')!
+  ctx.clearRect(0, 0, pxW, pxH)
+  ctx.save()
+  ctx.scale(dpr, dpr)
+  render(ctx)
+  ctx.restore()
+
+  const sprite: OverlaySprite = { canvas, width, height, dpr, dataHash }
+  overlayCache.set(cacheKey, sprite)
+  return sprite
+}
+
+/**
+ * Draw a cached overlay sprite at the given logical position.
+ */
+export function drawOverlaySprite(
+  ctx: CanvasRenderingContext2D,
+  sprite: OverlaySprite,
+  x: number,
+  y: number,
+): void {
+  ctx.drawImage(sprite.canvas, Math.round(x), Math.round(y), sprite.width, sprite.height)
+}
+
+/**
+ * Evict overlay cache entries for agents that no longer exist.
+ * Call once per frame (or every N frames) with the current agents map.
+ *
+ * Cache keys use a NUL separator (see `overlayKey`). The agentId is
+ * extracted precisely regardless of what characters the ID contains.
+ */
+export function pruneOverlayCache(activeAgentIds: ReadonlySet<string>): void {
+  for (const key of overlayCache.keys()) {
+    const agentId = agentIdFromOverlayKey(key)
+    if (agentId === undefined || !activeAgentIds.has(agentId)) {
+      overlayCache.delete(key)
+    }
+  }
+}
+
+/** Current number of entries in the overlay cache. Exposed for testing. */
+export function overlayCacheSize(): number {
+  return overlayCache.size
+}
+
+/** Clear all overlay cache entries. Exposed for testing. */
+export function _resetOverlayCacheForTest(): void {
+  overlayCache.clear()
+}
+
+/** Insert a stub overlay entry by key. Exposed for testing only — avoids
+ *  needing a real Canvas2D context in jsdom. */
+export function _insertOverlayStubForTest(key: string): void {
+  overlayCache.set(key, {
+    canvas: null as unknown as HTMLCanvasElement,
+    width: 0,
+    height: 0,
+    dpr: 1,
+    dataHash: '',
+  })
+}
