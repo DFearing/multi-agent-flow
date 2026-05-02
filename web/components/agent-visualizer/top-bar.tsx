@@ -6,6 +6,7 @@ import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
 import { agentCost } from "./canvas/draw-cost"
 import { SessionTabs } from "./session-tabs"
+import { FPSIndicator } from "./fps-indicator"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
@@ -128,6 +129,7 @@ export const TopBar = memo(function TopBar({
 
       {/* Right-side info/controls */}
       <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
+        <FPSIndicator />
         {isVSCode && <ConnectionIndicator status={connectionStatus} />}
         <span>{agentCount} agents</span>
         <span>
