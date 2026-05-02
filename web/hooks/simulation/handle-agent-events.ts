@@ -8,6 +8,42 @@ import { AGENT_SPAWN_DISTANCE } from '@/lib/canvas-constants'
 import { pushTimelineBlock, type ProcessEventContext, type MutableEventState } from './process-event'
 import { edgeId, asString, asBoolean } from './types'
 
+/** Materialize a placeholder root agent. Used when a subagent_spawn references
+ *  a parent that hasn't been spawned in this simulation yet — keeps edges valid
+ *  and avoids d3-force "node not found" errors. A later real agent_spawn for
+ *  this id will reactivate the placeholder via the existing-check. */
+function materializePlaceholderAgent(
+  name: string,
+  currentTime: number,
+  state: MutableEventState,
+  ctx: ProcessEventContext,
+): void {
+  const agent: Agent = {
+    id: name, name, state: 'idle',
+    parentId: null,
+    tokensUsed: 0, tokensMax: ctx.getContextWindowSize(undefined),
+    contextBreakdown: emptyContextBreakdown(),
+    toolCalls: 0, timeAlive: 0,
+    x: 0, y: 0, vx: 0, vy: 0,
+    pinned: false, isMain: true,
+    spawnTime: currentTime,
+    opacity: 0, scale: 0.3,
+    messageBubbles: [],
+  }
+  state.agents.set(name, agent)
+
+  const timelineEntry: TimelineEntry = {
+    id: `timeline-${name}`,
+    agentId: name,
+    agentName: name,
+    startTime: currentTime,
+    blocks: [],
+  }
+  pushTimelineBlock(timelineEntry, currentTime, { type: 'idle', label: 'Starting', color: COLORS.idle }, ctx)
+  state.timelineEntries.set(name, timelineEntry)
+  state.conversations.set(name, [])
+}
+
 export function handleAgentSpawn(
   payload: Record<string, unknown>,
   currentTime: number,
@@ -20,6 +56,14 @@ export function handleAgentSpawn(
   const task = typeof payload.task === 'string' ? payload.task : undefined
   const model = typeof payload.model === 'string' ? payload.model : undefined
   const runtime = payload.runtime === 'codex' ? 'codex' as const : undefined
+
+  // If a parent is referenced but missing, synthesize a placeholder root agent
+  // so edges and layout stay valid. Happens when the wire stream emits subagent
+  // spawns before any explicit orchestrator spawn (e.g. sessions that begin
+  // with a user message and dispatch directly).
+  if (parentId && parentId !== name && !state.agents.has(parentId)) {
+    materializePlaceholderAgent(parentId, currentTime, state, ctx)
+  }
 
   // If the agent already exists (e.g. session resuming after inactivity),
   // reactivate it instead of replacing — preserves accumulated stats.
@@ -105,7 +149,8 @@ export function handleAgentSpawn(
   state.conversations.set(name, [])
 
   if (!ctx.skipForceSync) {
-    setTimeout(() => ctx.syncForceSimulation(state.agents, state.edges), 0)
+    // Coalesced — animate loop runs the actual sync once per frame.
+    ctx.markForceSyncDirty()
   }
 }
 

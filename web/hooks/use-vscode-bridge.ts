@@ -55,6 +55,10 @@ export function useVSCodeBridge(): BridgeHookResult {
   const pendingEventsRef = useRef<SimulationEvent[]>([])
   const [, setEventVersion] = useState(0) // trigger re-render on new events
 
+  // rAF-coalesced bump: at most one re-render per animation frame regardless of event burst rate
+  const rafPendingRef = useRef(false)
+  const rafIdRef = useRef<number | null>(null)
+
   // Session state
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
@@ -142,9 +146,16 @@ export function useVSCodeBridge(): BridgeHookResult {
           return next
         })
       }
-      // Bump eventVersion on EVERY event so multi-canvas consumers re-render
-      // and pull new entries from their session's event log.
-      setEventVersion(v => v + 1)
+      // Coalesce re-renders: schedule at most one bump per animation frame
+      // so burst events (dozens/sec) only trigger a single React re-render per frame.
+      if (!rafPendingRef.current) {
+        rafPendingRef.current = true
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafPendingRef.current = false
+          rafIdRef.current = null
+          setEventVersion(v => v + 1)
+        })
+      }
 
       // Re-add dismissed sessions when new events arrive
       if (event.sessionId && dismissedSessionsRef.current.has(event.sessionId)) {
@@ -243,6 +254,12 @@ export function useVSCodeBridge(): BridgeHookResult {
       unsubStatus()
       unsubConfig()
       unsubSession()
+      // Cancel any pending rAF bump to avoid setState on unmounted component
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+        rafPendingRef.current = false
+      }
     }
   }, [])
 

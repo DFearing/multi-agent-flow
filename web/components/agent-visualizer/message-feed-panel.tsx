@@ -30,6 +30,23 @@ const MESSAGE_TRUNCATE_MAX = 120
 
 const MESSAGE_GAP = 4
 
+/** Merge two sorted-by-timestamp arrays into a fresh sorted array. O(N + M).
+ *  Used to incrementally extend the cached "all messages" feed without
+ *  re-sorting the whole thing on every append. */
+function mergeByTimestamp<T extends { timestamp: number }>(a: readonly T[], b: readonly T[]): T[] {
+  if (a.length === 0) return b.slice()
+  if (b.length === 0) return a.slice()
+  const out = new Array<T>(a.length + b.length)
+  let i = 0, j = 0, k = 0
+  while (i < a.length && j < b.length) {
+    if (a[i].timestamp <= b[j].timestamp) out[k++] = a[i++]
+    else out[k++] = b[j++]
+  }
+  while (i < a.length) out[k++] = a[i++]
+  while (j < b.length) out[k++] = b[j++]
+  return out
+}
+
 // ─── Main component ─────────────────────────────────────────────────────────
 
 export function MessageFeedPanel({
@@ -113,19 +130,26 @@ export function MessageFeedPanel({
     }
 
     if (activeTab === 'all') {
-      let appended = false
+      // Collect new messages from each agent into a batch (each agent's
+      // conversation is itself already sorted by timestamp), sort the batch,
+      // then merge it with the existing sorted cache. O(M log M + N + M)
+      // instead of O((N+M) log (N+M)) — meaningful as N grows past a few
+      // hundred messages in long-running sessions.
+      const newItems: (ConversationMessage & { agentId: string })[] = []
       for (const [agentId, msgs] of conversations) {
         if (!currentAgents.has(agentId)) continue
         const prevLen = cache.counts.get(agentId) ?? 0
         if (msgs.length > prevLen) {
           for (let i = prevLen; i < msgs.length; i++) {
-            if (TEXT_TYPES.has(msgs[i].type)) cache.result.push({ ...msgs[i], agentId })
+            if (TEXT_TYPES.has(msgs[i].type)) newItems.push({ ...msgs[i], agentId })
           }
           cache.counts.set(agentId, msgs.length)
-          appended = true
         }
       }
-      if (appended) cache.result.sort((a, b) => a.timestamp - b.timestamp)
+      if (newItems.length > 0) {
+        newItems.sort((a, b) => a.timestamp - b.timestamp)
+        cache.result = mergeByTimestamp(cache.result, newItems)
+      }
       return cache.result
     }
 
@@ -352,6 +376,12 @@ function TabButton({ label, active, onClick, color, hasUnread }: {
 
 const MESSAGE_LINE_CLAMP = 3
 
+// Approximate visible characters per line for the 9px monospace text used
+// in the feed at typical panel widths (320–720px). Used by the overflow
+// heuristic below; conservative on the low side so we lean towards showing
+// the "more" toggle on borderline messages.
+const APPROX_CHARS_PER_LINE = 50
+
 function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessionDot, onClick }: {
   message: ConversationMessage
   agentId: string
@@ -364,26 +394,21 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
   onClick: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [isOverflowing, setIsOverflowing] = useState(false)
-  const textRef = useRef<HTMLDivElement>(null)
   const role = ROLE_COLORS[message.type] ?? ROLE_COLORS.assistant
 
-  // Detect whether the line-clamped text actually overflows. Re-runs on
-  // panel width changes (line wrapping) and font/zoom changes (visual size).
-  useEffect(() => {
-    if (expanded) { setIsOverflowing(false); return }
-    const el = textRef.current
-    if (!el) return
-    const check = () => {
-      const node = textRef.current
-      if (!node) return
-      setIsOverflowing(node.scrollHeight > node.clientHeight + 1)
-    }
-    check()
-    const ro = new ResizeObserver(check)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [message.content, expanded])
+  // Content-based overflow heuristic — replaces a per-row ResizeObserver +
+  // scrollHeight measurement that was running for every visible message
+  // (and re-running on every width change, message change, or expand). The
+  // heuristic loses a little precision on borderline single-line messages
+  // when the panel is resized wider than expected, but eliminates the
+  // observer churn that compounds as the message list grows.
+  const overflowsContent = useMemo(() => {
+    const c = message.content
+    const newlineCount = (c.match(/\n/g) || []).length
+    if (newlineCount + 1 > MESSAGE_LINE_CLAMP) return true
+    return c.length > MESSAGE_LINE_CLAMP * APPROX_CHARS_PER_LINE
+  }, [message.content])
+  const isOverflowing = expanded ? false : overflowsContent
 
   return (
     <div
@@ -421,7 +446,6 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
 
       {/* Content — line-clamped when collapsed; CSS handles ellipsis only when actually overflowing. */}
       <div
-        ref={textRef}
         className="text-[9px] font-mono leading-relaxed whitespace-pre-wrap break-words"
         style={{
           color: role.text,

@@ -49,6 +49,10 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   const animateRef = useRef<(timestamp: number) => void>(() => {})
   /** Throttle React UI updates to ~4/sec — canvas stays smooth via frameRef */
   const lastUIUpdateRef = useRef(0)
+  /** Set by handlers when topology changes; animate() runs syncForceSimulation
+   *  at most once per frame to coalesce burst spawns (e.g. SSE replay). */
+  const forceSyncDirtyRef = useRef(false)
+  const markForceSyncDirty = useCallback(() => { forceSyncDirtyRef.current = true }, [])
 
   // ─── d3-force simulation ─────────────────────────────────────────────────
   useEffect(() => {
@@ -96,8 +100,13 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
       fy: a.pinned ? a.y : undefined,
     }))
 
+    // Drop links pointing at agents that aren't in this simulation's node set —
+    // d3-force throws "node not found" otherwise. Can happen when a subagent
+    // spawn references a parent (e.g. orchestrator) that hasn't been spawned
+    // in this per-session simulation yet.
+    const nodeIds = new Set(nodes.map(n => n.id))
     const links: ForceLink[] = edges
-      .filter(e => e.type === 'parent-child')
+      .filter(e => e.type === 'parent-child' && nodeIds.has(e.from) && nodeIds.has(e.to))
       .map(e => ({ id: e.id, source: e.from, target: e.to }))
 
     sim.nodes(nodes)
@@ -162,13 +171,14 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   const processEventWithContext = useCallback((event: SimulationEvent, prev: SimulationState): SimulationState => {
     const ctx: ProcessEventContext = {
       syncForceSimulation,
+      markForceSyncDirty,
       findToolSlot,
       getContextWindowSize,
       blockIdCounter,
       skipForceSync: skipForceSyncRef.current,
     }
     return processEvent(event, prev, ctx)
-  }, [syncForceSimulation, findToolSlot, getContextWindowSize])
+  }, [syncForceSimulation, markForceSyncDirty, findToolSlot, getContextWindowSize])
 
   // ─── Animation loop ──────────────────────────────────────────────────────
   // Reads/writes frameRef directly. Only calls commitState when new events
@@ -265,6 +275,15 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
 
     // Write to frameRef (canvas reads this every frame)
     frameRef.current = result
+
+    // Coalesced force-sim resync. handlers set forceSyncDirtyRef during event
+    // processing instead of scheduling N independent setTimeouts; we run one
+    // sync per frame against the post-event agents/edges. Big win during burst
+    // replay where hundreds of agent_spawns arrive in a single frame.
+    if (forceSyncDirtyRef.current) {
+      forceSyncDirtyRef.current = false
+      syncForceSimulation(result.agents, result.edges)
+    }
 
     // Force tick — updates agent positions in frameRef
     if (forceSimRef.current) forceSimRef.current.tick()

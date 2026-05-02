@@ -14,6 +14,10 @@ import { handleSubagentDispatch, handleSubagentReturn } from './handle-subagent-
 
 export interface ProcessEventContext {
   syncForceSimulation: (agents: Map<string, Agent>, edges: Edge[]) => void
+  /** Coalesced replacement for setTimeout(syncForceSimulation, 0). Multiple
+   *  calls within a single animation frame (e.g. burst replay of subagent
+   *  spawns) collapse to one sync at end-of-frame. */
+  markForceSyncDirty: () => void
   findToolSlot: (agent: Agent, agents: Map<string, Agent>, toolCalls: Map<string, ToolCallNode>, currentTime: number) => { x: number; y: number }
   getContextWindowSize: (modelId?: string) => number
   blockIdCounter: { current: number }
@@ -51,23 +55,38 @@ export function pushTimelineBlock(
   })
 }
 
-/** Shallow-compare two Maps by reference equality of values */
-function mapsEqual<K, V>(a: Map<K, V>, b: Map<K, V>): boolean {
-  if (a.size !== b.size) return false
-  for (const [k, v] of a) if (b.get(k) !== v) return false
-  return true
+/**
+ * Per-event-type clone plan: only clone the collections that the handler actually mutates.
+ * This eliminates unnecessary shallow copies + GC pressure for the majority of events.
+ */
+const CLONE_PLAN: Record<SimulationEvent['type'], readonly (keyof MutableEventState)[]> = {
+  agent_spawn:          ['agents', 'edges', 'timelineEntries', 'conversations'],
+  agent_complete:       ['agents', 'toolCalls', 'timelineEntries'],
+  agent_idle:           ['agents'],
+  model_detected:       ['agents'],
+  tool_call_start:      ['agents', 'toolCalls', 'edges', 'particles', 'timelineEntries', 'fileAttention', 'conversations'],
+  tool_call_end:        ['agents', 'toolCalls', 'particles', 'timelineEntries', 'fileAttention', 'conversations'],
+  message:              ['agents', 'conversations'],
+  context_update:       ['agents'],
+  subagent_dispatch:    ['particles'],
+  subagent_return:      ['particles'],
+  permission_requested: ['agents', 'timelineEntries'],
 }
 
 export function processEvent(event: SimulationEvent, prev: SimulationState, ctx: ProcessEventContext): SimulationState {
+      const plan = CLONE_PLAN[event.type]
+
+      // Build state by cloning only the collections this event type touches.
+      // Unmodified collections keep prev's reference identity.
       const state: MutableEventState = {
-        agents: new Map(prev.agents),
-        toolCalls: new Map(prev.toolCalls),
-        particles: [...prev.particles],
-        edges: [...prev.edges],
-        discoveries: [...prev.discoveries],
-        fileAttention: new Map(prev.fileAttention),
-        timelineEntries: new Map(prev.timelineEntries),
-        conversations: new Map(prev.conversations),
+        agents: plan.includes('agents') ? new Map(prev.agents) : prev.agents,
+        toolCalls: plan.includes('toolCalls') ? new Map(prev.toolCalls) : prev.toolCalls,
+        particles: plan.includes('particles') ? [...prev.particles] : prev.particles,
+        edges: plan.includes('edges') ? [...prev.edges] : prev.edges,
+        discoveries: plan.includes('discoveries') ? [...prev.discoveries] : prev.discoveries,
+        fileAttention: plan.includes('fileAttention') ? new Map(prev.fileAttention) : prev.fileAttention,
+        timelineEntries: plan.includes('timelineEntries') ? new Map(prev.timelineEntries) : prev.timelineEntries,
+        conversations: plan.includes('conversations') ? new Map(prev.conversations) : prev.conversations,
       }
 
       switch (event.type) {
@@ -84,15 +103,19 @@ export function processEvent(event: SimulationEvent, prev: SimulationState, ctx:
         case 'permission_requested': handlePermissionRequested(event.payload, prev.currentTime, state, ctx); break
       }
 
-      // Stabilize references for unchanged collections to prevent
-      // downstream React useMemo/re-render cascades (O(n log n) sorts etc.)
+      // Return state collections directly. Collections in the clone plan are fresh
+      // shallow copies (new reference) — handlers mutate entries in place, so we must
+      // propagate the new container reference to trigger downstream re-renders.
+      // Collections NOT in the clone plan already hold prev's reference (assigned above).
       return {
         ...prev,
-        agents: state.agents, toolCalls: state.toolCalls,
-        particles: state.particles, edges: state.edges,
+        agents: state.agents,
+        toolCalls: state.toolCalls,
+        particles: state.particles,
+        edges: state.edges,
         discoveries: state.discoveries,
-        fileAttention: mapsEqual(prev.fileAttention, state.fileAttention) ? prev.fileAttention : state.fileAttention,
-        timelineEntries: mapsEqual(prev.timelineEntries, state.timelineEntries) ? prev.timelineEntries : state.timelineEntries,
-        conversations: mapsEqual(prev.conversations, state.conversations) ? prev.conversations : state.conversations,
+        fileAttention: state.fileAttention,
+        timelineEntries: state.timelineEntries,
+        conversations: state.conversations,
       }
 }

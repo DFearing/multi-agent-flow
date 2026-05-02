@@ -7,8 +7,19 @@ import { useSessionNames } from '@/hooks/use-session-names'
 import { colorForSession } from '@/lib/colors'
 import { AgentCanvas } from './canvas'
 import { FloatingPanel } from './floating-panel'
-import { useSessionStats } from './session-stats-provider'
+import { useSessionStats, type SessionStats } from './session-stats-provider'
 import type { SimulationEvent } from '@/lib/agent-types'
+
+/** Stable empty-events sentinel — keeps the externalEvents prop reference
+ *  identical across idle renders so useAgentSimulation's animate callback
+ *  doesn't get rebuilt for nothing. */
+const EMPTY_EVENTS: readonly SimulationEvent[] = []
+
+/** ms between SessionStats publishes — caps the context cascade rate that
+ *  re-renders every consumer of useSessionStats (feed panel, cost panel,
+ *  top bar). The underlying simulation still advances every frame; this
+ *  only affects the React-level summary updates. */
+const STATS_PUBLISH_INTERVAL_MS = 1000
 
 // Per-session canvas panel: each session gets its own simulation + draggable
 // FloatingPanel containing an AgentCanvas. Events for the session are pulled
@@ -51,11 +62,15 @@ export function SessionCanvasPanel({
   onContextMenu, onToolCallClick, onDiscoveryClick,
 }: SessionCanvasPanelProps) {
   const panelId = `canvas-slot-${slot}` as const
-  // Local cursor over the bridge's per-session event log.
+  // Local cursor over the bridge's per-session event log. Slice only when
+  // there are actually new events so idle re-renders pass a stable empty
+  // reference instead of allocating fresh arrays.
   const consumedRef = useRef(0)
   const log = getSessionEventLog(sessionId)
   const sliceEnd = log.length
-  const newEvents = log.slice(consumedRef.current, sliceEnd) as SimulationEvent[]
+  const newEvents: readonly SimulationEvent[] = consumedRef.current < sliceEnd
+    ? (log.slice(consumedRef.current, sliceEnd) as SimulationEvent[])
+    : EMPTY_EVENTS
 
   const sim = useAgentSimulation({
     useMockData: false,
@@ -72,13 +87,34 @@ export function SessionCanvasPanel({
   }, [sim.play])
 
   const { setSessionStats, removeSessionStats } = useSessionStats()
+
+  // Keep a ref to the latest sim collections so the throttled publisher can
+  // read them without re-subscribing. Refs may be assigned during render —
+  // this is the standard React pattern for "always read the latest value".
+  const latestStatsRef = useRef<SessionStats>({
+    agents: sim.agents,
+    toolCalls: sim.toolCalls,
+    conversations: sim.conversations,
+  })
+  latestStatsRef.current = {
+    agents: sim.agents,
+    toolCalls: sim.toolCalls,
+    conversations: sim.conversations,
+  }
+
+  // Publish on mount and once per STATS_PUBLISH_INTERVAL_MS thereafter. The
+  // provider de-dupes by reference equality on each Map field, so an interval
+  // tick where nothing changed is a no-op — we just cap the worst-case cascade
+  // rate that re-renders every consumer of useSessionStats.
   useEffect(() => {
-    setSessionStats(sessionId, {
-      agents: sim.agents,
-      toolCalls: sim.toolCalls,
-      conversations: sim.conversations,
-    })
-  }, [sessionId, sim.agents, sim.toolCalls, sim.conversations, setSessionStats])
+    setSessionStats(sessionId, latestStatsRef.current)
+    const id = setInterval(
+      () => setSessionStats(sessionId, latestStatsRef.current),
+      STATS_PUBLISH_INTERVAL_MS,
+    )
+    return () => clearInterval(id)
+  }, [sessionId, setSessionStats])
+
   useEffect(() => {
     return () => removeSessionStats(sessionId)
   }, [sessionId, removeSessionStats])

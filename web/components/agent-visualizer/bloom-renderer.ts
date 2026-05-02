@@ -39,38 +39,26 @@ export class BloomRenderer {
 
     if (w === 0 || h === 0 || !this.enabled) return
 
-    // Draw source at half resolution
+    // Half-res copy of the source.
     this.bloomCtx.clearRect(0, 0, w, h)
     this.bloomCtx.drawImage(sourceCanvas, 0, 0, w, h)
 
-    // Apply blur passes (box blur approximation of gaussian)
-    this.boxBlur(this.bloomCtx, this.tempCtx, w, h, 8)
-    this.boxBlur(this.bloomCtx, this.tempCtx, w, h, 6)
-    this.boxBlur(this.bloomCtx, this.tempCtx, w, h, 4)
+    // Single Gaussian blur pass — CSS `filter: blur(N)` is already Gaussian,
+    // so the multi-pass approximation we used previously was redundant. The
+    // ~12px radius matches the cumulative effect of the old 8+6+4 chain
+    // closely enough that the visual difference is minimal, with ~3× fewer
+    // GPU ops per canvas per frame.
+    this.tempCtx.clearRect(0, 0, w, h)
+    this.tempCtx.filter = 'blur(12px)'
+    this.tempCtx.drawImage(this.bloomCanvas, 0, 0)
+    this.tempCtx.filter = 'none'
 
-    // Composite bloom over the target with additive blending
+    // Composite bloom over the target with additive blending.
     targetCtx.save()
     targetCtx.globalCompositeOperation = 'lighter'
     targetCtx.globalAlpha = this.intensity
-    targetCtx.drawImage(this.bloomCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height)
+    targetCtx.drawImage(this.tempCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height)
     targetCtx.restore()
-  }
-
-  private boxBlur(
-    srcCtx: CanvasRenderingContext2D,
-    tmpCtx: CanvasRenderingContext2D,
-    w: number,
-    h: number,
-    radius: number,
-  ): void {
-    // Use CSS filter for fast blur
-    tmpCtx.clearRect(0, 0, w, h)
-    tmpCtx.filter = `blur(${radius}px)`
-    tmpCtx.drawImage(srcCtx.canvas, 0, 0)
-    tmpCtx.filter = 'none'
-
-    srcCtx.clearRect(0, 0, w, h)
-    srcCtx.drawImage(tmpCtx.canvas, 0, 0)
   }
 
   setIntensity(intensity: number): void {
