@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
-import { TimelineEvent, TIMING } from '@/lib/agent-types'
+import { TimelineEvent } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 
 interface ControlBarProps {
@@ -104,29 +104,19 @@ export function ControlBar(props: ControlBarProps) {
 
 function LiveControlBar({
   currentTime, totalDuration, timelineEvents,
-  eventCount = 0, onEnterReview, isReviewing,
+  eventCount = 0, onEnterReview,
 }: ControlBarProps) {
-  const [pulseOn, setPulseOn] = useState(true)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
-
-  useEffect(() => {
-    if (isReviewing) return
-    const interval = setInterval(() => setPulseOn(p => !p), TIMING.livePulseMs)
-    return () => clearInterval(interval)
-  }, [isReviewing])
 
   return (
     <div style={BAR_WRAPPER_STYLE}>
       <div className="px-3 py-2 flex items-center gap-2">
-        {/* LIVE badge */}
+        {/* LIVE badge — pulse is a pure CSS animation (see globals.css)
+         *  so N canvases cost zero JS timers / zero React re-renders for it. */}
         <div className="flex items-center gap-1.5 shrink-0">
           <span
-            className="w-2 h-2 rounded-full transition-opacity duration-500"
-            style={{
-              background: COLORS.liveDot,
-              boxShadow: pulseOn ? `0 0 8px ${COLORS.liveDot}, 0 0 16px rgba(255,68,68,0.3)` : `0 0 4px ${COLORS.liveDot}80`,
-              opacity: pulseOn ? 1 : 0.6,
-            }}
+            className="w-2 h-2 rounded-full live-pulse-dot"
+            style={{ background: COLORS.liveDot }}
           />
           <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.liveText }}>
             LIVE

@@ -157,6 +157,10 @@ export function SessionCanvasPanel({
 
   // Build timeline event dots incrementally from this session's conversations.
   // Mirrors the global computation in index.tsx but scoped to one session.
+  // The cache holds the working array; the memo returns a *new* array
+  // reference whenever items were appended so downstream `React.memo` /
+  // dep-array consumers can detect updates by identity (no need for the
+  // brittle `eventCount` memo-buster trick).
   const timelineCacheRef = useRef<{ counts: Map<string, number>; events: TimelineEvent[]; idCounter: number }>({
     counts: new Map(),
     events: [],
@@ -182,47 +186,62 @@ export function SessionCanvasPanel({
         appended = true
       }
     }
-    if (appended) cache.events.sort((a, b) => a.timestamp - b.timestamp)
+    if (appended) {
+      cache.events.sort((a, b) => a.timestamp - b.timestamp)
+      // Replace with a fresh array so consumers see a new reference when
+      // (and only when) something was actually appended.
+      cache.events = cache.events.slice()
+    }
     return cache.events
   }, [sim.conversations])
 
+  // useAgentSimulation returns a fresh object every state commit, so listing
+  // sim.play / sim.pause / etc. as useCallback deps would re-create the handlers
+  // on every simulation tick. A ref gives the handlers stable identity while
+  // still reading the latest sim methods/values.
+  const simRef = useRef(sim)
+  simRef.current = sim
+
   const handlePlayPause = useCallback(() => {
-    if (sim.isPlaying) {
-      sim.pause()
+    const s = simRef.current
+    if (s.isPlaying) {
+      s.pause()
       setIsReviewing(true)
     } else {
-      sim.play()
+      s.play()
     }
-  }, [sim.isPlaying, sim.play, sim.pause])
+  }, [])
 
   const handleEnterReview = useCallback(() => {
-    sim.pause()
+    simRef.current.pause()
     setIsReviewing(true)
-  }, [sim.pause])
+  }, [])
 
   const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleResumeLive = useCallback(() => {
+    const s = simRef.current
     setIsReviewing(false)
-    sim.seekToTime(sim.maxTimeReached)
+    s.seekToTime(s.maxTimeReached)
     setZoomToFitTick(n => n + 1)
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current)
     resumeTimerRef.current = setTimeout(
-      () => { resumeTimerRef.current = null; sim.play() },
+      () => { resumeTimerRef.current = null; simRef.current.play() },
       TIMING.resumeLiveDelayMs,
     )
-  }, [sim.seekToTime, sim.maxTimeReached, sim.play])
+  }, [])
   useEffect(() => () => { if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current) }, [])
 
   const handleRestart = useCallback(() => {
     setIsReviewing(false)
-    sim.restart(true)
-  }, [sim.restart])
+    simRef.current.restart(true)
+  }, [])
 
   const handleSeek = useCallback((time: number) => {
-    sim.pause()
-    sim.seekToTime(time)
+    const s = simRef.current
+    s.pause()
+    s.seekToTime(time)
     setZoomToFitTick(n => n + 1)
-  }, [sim.pause, sim.seekToTime])
+  }, [])
 
   // Combine the parent's zoom-to-fit trigger with this canvas's own (fired by
   // seek/resume) so both routes invalidate the canvas's auto-fit cache.
