@@ -103,7 +103,7 @@ describe('useFrameRefSelector', () => {
       renderHook(() => useFrameRefSelector(ref, (s) => s.currentTime)),
       renderHook(() => useFrameRefSelector(ref, (s) => s.isPlaying)),
       renderHook(() => useFrameRefSelector(ref, (s) => s.speed)),
-      renderHook(() => useFrameRefSelector(ref, (s) => s.maxTime)),
+      renderHook(() => useFrameRefSelector(ref, (s) => s.maxTimeReached)),
     ]
 
     // 4 selectors mounted — only ONE additional setInterval should have fired.
