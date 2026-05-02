@@ -53,6 +53,35 @@ export function getAgentGlowSprite(
   return sprite
 }
 
+/** Scanline strip: vertical fade 0 → midAlpha → 0. Cached per (color, midAlpha).
+ *  The sprite is rendered at a fixed width and height = stripHeight; callers
+ *  draw it stretched to whatever world width they need. Source width is wide
+ *  enough that horizontal stretching doesn't introduce visible artifacts on
+ *  the smooth vertical gradient. */
+const SCANLINE_SPRITE_WIDTH = 64
+export function getScanlineSprite(
+  color: string, midAlpha: string, stripHeight: number,
+): HTMLCanvasElement {
+  const h = Math.max(1, Math.ceil(stripHeight))
+  const key = `scan|${color}|${midAlpha}|${h}`
+  let sprite = glowSpriteCache.get(key)
+  if (sprite) return sprite
+
+  sprite = document.createElement('canvas')
+  sprite.width = SCANLINE_SPRITE_WIDTH
+  sprite.height = h
+  const ctx = sprite.getContext('2d')!
+  const grad = ctx.createLinearGradient(0, 0, 0, h)
+  grad.addColorStop(0, color + '00')
+  grad.addColorStop(0.5, color + midAlpha)
+  grad.addColorStop(1, color + '00')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, SCANLINE_SPRITE_WIDTH, h)
+
+  glowSpriteCache.set(key, sprite)
+  return sprite
+}
+
 // ─── Text measurement cache ────────────────────────────────────────────────
 // Caches ctx.measureText().width to avoid redundant browser layout per frame.
 

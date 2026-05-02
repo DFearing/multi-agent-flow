@@ -5,7 +5,7 @@ import {
 } from '@/lib/canvas-constants'
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
-import { getAgentGlowSprite } from './render-cache'
+import { getAgentGlowSprite, getScanlineSprite } from './render-cache'
 
 let _claudeSparkPath: Path2D | null = null
 export function getClaudeSparkPath() {
@@ -211,13 +211,11 @@ function drawScanline(ctx: CanvasRenderingContext2D, agent: Agent, r: number, co
   ctx.save()
   drawHexagon(ctx, agent.x, agent.y, r)
   ctx.clip()
-  const scanGrad = ctx.createLinearGradient(agent.x, scanY - AGENT_DRAW.scanlineHalfH, agent.x, scanY + AGENT_DRAW.scanlineHalfH)
   const scanAlpha = isHovered ? '35' : '20'
-  scanGrad.addColorStop(0, color + '00')
-  scanGrad.addColorStop(0.5, color + scanAlpha)
-  scanGrad.addColorStop(1, color + '00')
-  ctx.fillStyle = scanGrad
-  ctx.fillRect(agent.x - r, scanY - AGENT_DRAW.scanlineHalfH, r * 2, AGENT_DRAW.scanlineWidth)
+  // Pre-rendered vertical fade strip — avoids a createLinearGradient + 3
+  // addColorStop calls per agent per frame.
+  const sprite = getScanlineSprite(color, scanAlpha, AGENT_DRAW.scanlineWidth)
+  ctx.drawImage(sprite, agent.x - r, scanY - AGENT_DRAW.scanlineHalfH, r * 2, AGENT_DRAW.scanlineWidth)
   ctx.restore()
 }
 

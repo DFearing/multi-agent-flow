@@ -2,6 +2,7 @@ import { Agent, ToolCallNode, Particle, Edge, BEAM, ANIM } from '@/lib/agent-typ
 import { COLORS } from '@/lib/colors'
 import { alphaHex } from '@/lib/utils'
 import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
+import { type ViewBounds, isBezierVisible } from './viewport'
 
 export function bezierPoint(t: number, p0: number, p1: number, p2: number, p3: number) {
   const mt = 1 - t
@@ -105,6 +106,7 @@ export function drawEdges(
   toolCalls: Map<string, ToolCallNode>,
   activeEdgeIds: Set<string>,
   time: number,
+  bounds?: ViewBounds,
 ) {
   for (const edge of edges) {
     const fromAgent = agents.get(edge.from)
@@ -122,6 +124,10 @@ export function drawEdges(
     const cp = computeControlPoints(fromX, fromY, toX, toY)
     if (!cp) continue
     const { cp1x, cp1y, cp2x, cp2y } = cp
+
+    // Cull edges whose bezier control polygon is entirely off-screen.
+    // Margin covers the widest beam plus glow so partial overlaps still draw.
+    if (bounds && !isBezierVisible(fromX, fromY, cp1x, cp1y, cp2x, cp2y, toX, toY, bounds, 16)) continue
 
     const beamColor = edge.type === 'tool' ? COLORS.tool : COLORS.holoBase
     const bw = edge.type === 'tool' ? BEAM.tool : BEAM.parentChild

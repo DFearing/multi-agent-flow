@@ -2,6 +2,7 @@ import { COLORS } from '@/lib/colors'
 import { SPAWN_FX, COMPLETE_FX } from '@/lib/canvas-constants'
 import { drawHexagon } from './draw-misc'
 import { alphaHex } from '@/lib/utils'
+import { getGlowSprite } from './render-cache'
 
 export interface VisualEffect {
   type: 'spawn' | 'complete' | 'shatter'
@@ -59,14 +60,17 @@ export function drawEffects(ctx: CanvasRenderingContext2D, effects: VisualEffect
         const ringRadius = COMPLETE_FX.ringStart + progress * COMPLETE_FX.ringExpand
         const alpha = (1 - progress) * COMPLETE_FX.maxAlpha
 
-        // Bright white flash (first 20%)
+        // Bright white flash (first 20%) — pre-rendered radial sprite,
+        // alpha modulated via globalAlpha so the same sprite serves the
+        // whole fade animation.
         if (progress < COMPLETE_FX.flashThreshold) {
           const flashAlpha = (1 - progress / COMPLETE_FX.flashThreshold) * COMPLETE_FX.flashAlpha
-          const grad = ctx.createRadialGradient(fx.x, fx.y, 0, fx.x, fx.y, COMPLETE_FX.flashRadius)
-          grad.addColorStop(0, COLORS.holoHot + alphaHex(flashAlpha))
-          grad.addColorStop(1, COLORS.holoHot + '00')
-          ctx.fillStyle = grad
-          ctx.fillRect(fx.x - COMPLETE_FX.flashRadius, fx.y - COMPLETE_FX.flashRadius, COMPLETE_FX.flashRadius * 2, COMPLETE_FX.flashRadius * 2)
+          const flashR = COMPLETE_FX.flashRadius
+          const flashSprite = getGlowSprite(COLORS.holoHot, flashR, 'ff', '00')
+          const prevAlpha = ctx.globalAlpha
+          ctx.globalAlpha = prevAlpha * flashAlpha
+          ctx.drawImage(flashSprite, fx.x - flashR, fx.y - flashR)
+          ctx.globalAlpha = prevAlpha
         }
 
         // Expanding ring
@@ -106,14 +110,11 @@ export function drawEffects(ctx: CanvasRenderingContext2D, effects: VisualEffect
           ctx.arc(px, py, size, 0, Math.PI * 2)
           ctx.fill()
 
-          // Tiny glow on each particle
-          ctx.beginPath()
-          const glow = ctx.createRadialGradient(px, py, 0, px, py, size * 3)
-          glow.addColorStop(0, fx.color + '40')
-          glow.addColorStop(1, fx.color + '00')
-          ctx.fillStyle = glow
-          ctx.arc(px, py, size * 3, 0, Math.PI * 2)
-          ctx.fill()
+          // Tiny glow on each particle (pre-rendered sprite — getGlowSprite
+          // already caches per (color, radius, innerAlpha, outerAlpha)).
+          const glowR = size * 3
+          const glowSprite = getGlowSprite(fx.color, glowR, '40', '00')
+          ctx.drawImage(glowSprite, px - glowR, py - glowR)
         }
         break
       }

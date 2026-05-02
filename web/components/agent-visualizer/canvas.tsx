@@ -19,6 +19,7 @@ import {
   drawDiscoveries, drawDiscoveryConnections,
   drawCostLabels,
   detectStateChanges as detectStateChangesPure,
+  computeViewBounds,
 } from './canvas/'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
@@ -63,10 +64,16 @@ export function AgentCanvas({
   const lastFrameTimeRef = useRef(0)
   const dprRef = useRef(1)
 
-  // Effects system
+  // Effects system. `agentStatesA/B` and `toolStatesA/B` are alternating
+  // snapshot pairs that detectStateChanges ping-pongs between — we hold them
+  // in refs and just .clear() one of each pair per frame, instead of letting
+  // the detector allocate a fresh Map every time.
   const effectsRef = useRef<VisualEffect[]>([])
-  const prevAgentStatesRef = useRef<Map<string, string>>(new Map())
-  const prevToolStatesRef = useRef<Map<string, string>>(new Map())
+  const agentStatesARef = useRef<Map<string, string>>(new Map())
+  const agentStatesBRef = useRef<Map<string, string>>(new Map())
+  const toolStatesARef = useRef<Map<string, string>>(new Map())
+  const toolStatesBRef = useRef<Map<string, string>>(new Map())
+  const stateMapsUseARef = useRef(true)
 
   // Rate-limited error logging for the draw loop (avoid flooding console)
   const lastDrawErrorRef = useRef(0)
@@ -156,13 +163,18 @@ export function AgentCanvas({
 
   const detectStateChanges = useCallback(() => {
     const { agents, toolCalls } = drawPropsRef.current
-    const { effects, newAgentStates, newToolStates } = detectStateChangesPure(
+    const useA = stateMapsUseARef.current
+    const prevAgents = useA ? agentStatesARef.current : agentStatesBRef.current
+    const outAgents = useA ? agentStatesBRef.current : agentStatesARef.current
+    const prevTools  = useA ? toolStatesARef.current  : toolStatesBRef.current
+    const outTools   = useA ? toolStatesBRef.current  : toolStatesARef.current
+    const { effects } = detectStateChangesPure(
       agents, toolCalls,
-      prevAgentStatesRef.current, prevToolStatesRef.current,
+      prevAgents, prevTools,
+      outAgents, outTools,
     )
     effectsRef.current.push(...effects)
-    prevAgentStatesRef.current = newAgentStates
-    prevToolStatesRef.current = newToolStates
+    stateMapsUseARef.current = !useA
   }, [])
 
   // ─── Main draw loop ────────────────────────────────────────────────────
@@ -269,14 +281,19 @@ export function AgentCanvas({
         edgeLookupCacheRef.current = { particles, edges, activeEdgeIds, edgeMap }
       }
 
-      drawDiscoveryConnections(ctx, discoveries, agents)
-      drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
-      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId)
-      drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
+      // World-space viewport bounds — recomputed every frame; draw functions
+      // skip entities whose bounding box doesn't overlap, which is a big win
+      // when zoomed in or with many agents/edges off-screen.
+      const viewBounds = computeViewBounds(w, h, transform)
+
+      drawDiscoveryConnections(ctx, discoveries, agents, viewBounds)
+      drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current, viewBounds)
+      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, viewBounds)
+      drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId, viewBounds)
       drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
       drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
       if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
-      drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)
+      drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current, viewBounds)
       drawEffects(ctx, effectsRef.current)
 
       if (selectedAgentId) {

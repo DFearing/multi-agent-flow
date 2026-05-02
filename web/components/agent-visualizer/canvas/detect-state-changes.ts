@@ -15,8 +15,10 @@ export type StateTransition =
  * Compare previous and current agent/tool states and return both visual effects
  * and semantic transitions.
  *
- * This is a pure function: it reads the previous state maps, computes results,
- * and returns the effects, transitions, and updated state maps.
+ * The caller owns two pairs of state Maps and ping-pongs them across frames:
+ * `prev*` is the read-only snapshot from last frame and `out*` is cleared and
+ * repopulated here as the new snapshot. This avoids allocating two fresh Maps
+ * every frame in the per-canvas draw loop.
  *
  * Both the canvas (for visuals) and the audio system (for sounds) consume
  * these results, keeping detection logic in a single place.
@@ -26,19 +28,19 @@ export function detectStateChanges(
   toolCalls: Map<string, ToolCallNode>,
   prevAgentStates: Map<string, string>,
   prevToolStates: Map<string, string>,
+  outAgentStates: Map<string, string>,
+  outToolStates: Map<string, string>,
 ): {
   effects: VisualEffect[]
   transitions: StateTransition[]
-  newAgentStates: Map<string, string>
-  newToolStates: Map<string, string>
 } {
   const effects: VisualEffect[] = []
   const transitions: StateTransition[] = []
-  const newAgentStates = new Map<string, string>()
-  const newToolStates = new Map<string, string>()
+  outAgentStates.clear()
+  outToolStates.clear()
 
   for (const [id, agent] of agents) {
-    newAgentStates.set(id, agent.state)
+    outAgentStates.set(id, agent.state)
     const oldState = prevAgentStates.get(id)
 
     // Spawn: new agent (wasn't in prev)
@@ -63,7 +65,7 @@ export function detectStateChanges(
   }
 
   for (const [id, tool] of toolCalls) {
-    newToolStates.set(id, tool.state)
+    outToolStates.set(id, tool.state)
     const oldState = prevToolStates.get(id)
 
     // Tool just started running
@@ -95,5 +97,5 @@ export function detectStateChanges(
     }
   }
 
-  return { effects, transitions, newAgentStates, newToolStates }
+  return { effects, transitions }
 }

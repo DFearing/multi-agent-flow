@@ -4,6 +4,7 @@ import { PARTICLE_DRAW } from '@/lib/canvas-constants'
 import { alphaHex } from '@/lib/utils'
 import { bezierPoint, resolveEdgeTarget, computeControlPoints } from './draw-edges'
 import { getGlowSprite } from './render-cache'
+import { type ViewBounds, isBezierVisible } from './viewport'
 
 /** Pre-build edge lookup map. Call once per frame, pass to drawParticles. */
 export function buildEdgeMap(edges: Edge[]): Map<string, Edge> {
@@ -37,6 +38,7 @@ export function drawParticles(
   agents: Map<string, Agent>,
   toolCalls: Map<string, ToolCallNode>,
   time: number,
+  bounds?: ViewBounds,
 ) {
   for (const particle of particles) {
     const edge = edgeMap.get(particle.edgeId)
@@ -53,6 +55,10 @@ export function drawParticles(
     const cp = computeControlPoints(fromX, fromY, toX, toY)
     if (!cp) continue
     const { cp1x, cp1y, cp2x, cp2y, dx, dy, dist } = cp
+
+    // Cull particles whose entire bezier track is off-screen — covers trail
+    // segments too since the trail follows the same curve.
+    if (bounds && !isBezierVisible(fromX, fromY, cp1x, cp1y, cp2x, cp2y, toX, toY, bounds, 24)) continue
 
     const t = particle.progress
 

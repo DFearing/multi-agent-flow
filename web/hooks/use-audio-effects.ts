@@ -12,8 +12,14 @@ export function useAudioEffects(
   const audioRef = useRef<AudioEngine | null>(null)
   const [isMuted, setIsMuted] = useState(true)
   const seekingRef = useRef(false)
-  const prevToolStatesRef = useRef<Map<string, string>>(new Map())
-  const prevAgentStatesRef = useRef<Map<string, string>>(new Map())
+  // Ping-pong pairs for the state-change detector (see canvas.tsx for the
+  // same pattern). Reused across calls; one half is "prev", the other is
+  // cleared and repopulated each call.
+  const agentStatesARef = useRef<Map<string, string>>(new Map())
+  const agentStatesBRef = useRef<Map<string, string>>(new Map())
+  const toolStatesARef = useRef<Map<string, string>>(new Map())
+  const toolStatesBRef = useRef<Map<string, string>>(new Map())
+  const stateMapsUseARef = useRef(true)
 
   // Audio engine lifecycle + restore persisted mute preference
   useEffect(() => {
@@ -34,12 +40,17 @@ export function useAudioEffects(
     if (seekingRef.current || !audioRef.current || isReviewing) return
     const audio = audioRef.current
 
-    const { transitions, newAgentStates, newToolStates } = detectStateChanges(
+    const useA = stateMapsUseARef.current
+    const prevAgents = useA ? agentStatesARef.current : agentStatesBRef.current
+    const outAgents = useA ? agentStatesBRef.current : agentStatesARef.current
+    const prevTools  = useA ? toolStatesARef.current  : toolStatesBRef.current
+    const outTools   = useA ? toolStatesBRef.current  : toolStatesARef.current
+    const { transitions } = detectStateChanges(
       agents, toolCalls,
-      prevAgentStatesRef.current, prevToolStatesRef.current,
+      prevAgents, prevTools,
+      outAgents, outTools,
     )
-    prevAgentStatesRef.current = newAgentStates
-    prevToolStatesRef.current = newToolStates
+    stateMapsUseARef.current = !useA
 
     for (const t of transitions) {
       switch (t.kind) {
