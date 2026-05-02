@@ -44,10 +44,10 @@ export function FPSIndicator() {
       title="Browser frame rate (rAF). Page-wide; reflects overall render budget."
       className="font-mono"
       style={{
-        height: 26,
-        padding: '0 10px',
-        fontSize: 11,
-        lineHeight: '26px',
+        height: 32,
+        padding: '0 14px',
+        fontSize: 13,
+        lineHeight: '32px',
         background: 'rgba(100, 200, 255, 0.06)',
         border: '1px solid rgba(100, 200, 255, 0.18)',
         borderRadius: 4,
@@ -65,7 +65,7 @@ export function FPSIndicator() {
         }}
       />
       <span style={{ color }}>{fps}</span>
-      <span style={{ color: COLORS.textMuted, fontSize: 10 }}>fps</span>
+      <span style={{ color: COLORS.textMuted, fontSize: 12 }}>fps</span>
     </div>
   )
 }
