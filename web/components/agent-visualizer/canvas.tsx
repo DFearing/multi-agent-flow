@@ -6,7 +6,7 @@ import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
 import { BloomRenderer } from './bloom-renderer'
-import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
+import { createDepthParticles, updateDepthParticles, drawBackground, createHexGridCache, type HexGridCache } from './background-layer'
 import {
   type VisualEffect,
   drawTetherLine,
@@ -77,6 +77,7 @@ export function AgentCanvas({
   const depthParticlesRef = useRef<DepthParticle[]>([])
   const lastFrameTimeRef = useRef(0)
   const dprRef = useRef(1)
+  const hexGridCacheRef = useRef<HexGridCache>(createHexGridCache())
 
   // Effects system. `agentStatesA/B` and `toolStatesA/B` are alternating
   // snapshot pairs that detectStateChanges ping-pongs between — we hold them
@@ -297,7 +298,7 @@ export function AgentCanvas({
         }
       }
 
-      drawBackground(ctx, w, h, depthParticlesRef.current, transform, showHexGrid, timeRef.current, activeAgentPos)
+      drawBackground(ctx, w, h, depthParticlesRef.current, transform, showHexGrid, timeRef.current, activeAgentPos, dpr, hexGridCacheRef.current)
 
       ctx.save()
       ctx.translate(transform.x, transform.y)
