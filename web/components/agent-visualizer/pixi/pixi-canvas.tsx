@@ -12,7 +12,7 @@
  * Effects layer (spawn/complete FX) is the only remaining TODO.
  */
 
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import type { Application } from 'pixi.js'
 import { Container } from 'pixi.js'
 import type { SimulationState } from '@/hooks/simulation/types'
@@ -28,6 +28,7 @@ import { BubblesLayer } from './bubbles-layer'
 import { ParticlesLayer } from './particles-layer'
 import { PixiBloomFilter } from './bloom-filter'
 import { applyCameraTransform } from './camera'
+import { useSimulationManager } from '../simulation-manager-provider'
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -76,6 +77,7 @@ export function PixiCanvas({
   minZoomLevel,
   pauseWhenOffscreen = true,
 }: CanvasProps) {
+  const manager = useSimulationManager()
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
   const backgroundLayerRef = useRef<BackgroundLayer | null>(null)
@@ -87,7 +89,8 @@ export function PixiCanvas({
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
   const bloomFilterRef = useRef<PixiBloomFilter | null>(null)
   const worldRef = useRef<Container | null>(null)
-  const animRef = useRef<number>(0)
+  /** Set to true once boot() completes and layers are ready. */
+  const readyRef = useRef(false)
   const timeRef = useRef(0)
   const lastFrameRef = useRef(0)
 
@@ -232,6 +235,104 @@ export function PixiCanvas({
   const updateDragLerpRef = useRef(updateDragLerp)
   updateDragLerpRef.current = updateDragLerp
 
+  // ─── Draw callback (registered with shared render loop) ─────────────
+  // Defined at component scope using refs so it doesn't depend on the
+  // async boot closure. readyRef gates execution until layers are built.
+  const drawRef = useRef<(timestamp: number) => void>(() => {})
+
+  const pixiDraw = useCallback((timestamp: number) => {
+    if (!readyRef.current) return
+
+    // Skip rendering when the canvas is off-screen (IntersectionObserver).
+    if (!visibleRef.current && !needsCatchUpRef.current) return
+    needsCatchUpRef.current = false
+
+    const dt = lastFrameRef.current
+      ? (timestamp - lastFrameRef.current) / 1000
+      : 0.016
+    lastFrameRef.current = timestamp
+    timeRef.current += dt
+
+    // Read simulation state from ref — no React re-render needed
+    const s = simulationRef.current
+    const p = drawPropsRef.current
+    p.agents = s.agents
+    p.toolCalls = s.toolCalls
+    p.discoveries = s.discoveries
+    if (s.currentTime != null) simTimeRef.current = s.currentTime
+
+    // Camera physics (inertia + auto-fit)
+    updateCameraRef.current(p.isDragging, p.pauseAutoFit)
+
+    // Floaty agent drag
+    updateDragLerpRef.current(s.agents, p.onAgentDrag)
+
+    const world = worldRef.current
+    if (!world) return
+
+    // Apply camera transform to the world container
+    applyCameraTransform(world, transformRef.current)
+
+    // Update layers — all refs are populated after boot
+    backgroundLayerRef.current?.update(
+      p.dimensions.width,
+      p.dimensions.height,
+      transformRef.current,
+      dt,
+      timeRef.current,
+      showHexGrid,
+    )
+
+    edgesLayerRef.current?.update(
+      s.edges,
+      s.particles,
+      s.agents,
+      s.toolCalls,
+      timeRef.current,
+    )
+
+    toolCallsLayerRef.current?.update(
+      s.toolCalls,
+      timeRef.current,
+      selectedToolCallId,
+    )
+
+    discoveriesLayerRef.current?.update(
+      s.discoveries,
+      s.agents,
+      selectedDiscoveryId,
+    )
+
+    agentsLayerRef.current?.update(
+      s.agents,
+      selectedAgentId,
+      hoveredAgentId,
+      showStats,
+      timeRef.current,
+    )
+
+    bubblesLayerRef.current?.update(s.agents, timeRef.current)
+
+    particlesLayerRef.current?.update(
+      s.particles,
+      s.edges,
+      s.agents,
+      s.toolCalls,
+      timeRef.current,
+    )
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- layer refs are stable; hook refs kept in sync above
+  }, [simulationRef, transformRef, showHexGrid, selectedToolCallId, selectedDiscoveryId, selectedAgentId, hoveredAgentId, showStats])
+
+  drawRef.current = pixiDraw
+
+  // Register with the shared render loop.
+  useEffect(() => {
+    const callback = (timestamp: number) => drawRef.current(timestamp)
+    return manager.registerRender(callback)
+  }, [manager])
+
+  // ─── Bootstrap (scene graph only — no rAF) ─────────────────────────────
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -254,151 +355,46 @@ export function PixiCanvas({
       appRef.current = app
 
       // ── Build scene graph ──────────────────────────────────────────
-      // World container — camera transform applied here.
-      // Screen-space layers (HUD, perf overlay) should be added as
-      // siblings of `world` on `app.stage`, NOT as children of `world`.
       const world = new Container()
       world.label = 'world'
       app.stage.addChild(world)
       worldRef.current = world
 
-      // Background layer (behind everything)
-      const backgroundLayer = new BackgroundLayer()
-      world.addChild(backgroundLayer.container)
-      backgroundLayerRef.current = backgroundLayer
+      backgroundLayerRef.current = new BackgroundLayer()
+      world.addChild(backgroundLayerRef.current.container)
 
-      // Edges layer (behind tool calls in z-order, matching Canvas2D draw order)
-      const edgesLayer = new EdgesLayer()
-      world.addChild(edgesLayer.container)
-      edgesLayerRef.current = edgesLayer
+      edgesLayerRef.current = new EdgesLayer()
+      world.addChild(edgesLayerRef.current.container)
 
-      // Tool calls layer (above edges, below discoveries)
-      const toolCallsLayer = new ToolCallsLayer()
-      world.addChild(toolCallsLayer.container)
-      toolCallsLayerRef.current = toolCallsLayer
+      toolCallsLayerRef.current = new ToolCallsLayer()
+      world.addChild(toolCallsLayerRef.current.container)
 
-      // Discoveries layer (above tool calls, below agents)
-      const discoveriesLayer = new DiscoveriesLayer()
-      world.addChild(discoveriesLayer.container)
-      discoveriesLayerRef.current = discoveriesLayer
+      discoveriesLayerRef.current = new DiscoveriesLayer()
+      world.addChild(discoveriesLayerRef.current.container)
 
-      // Agents layer (above discoveries, below bubbles)
-      const agentsLayer = new AgentsLayer()
-      world.addChild(agentsLayer.container)
-      agentsLayerRef.current = agentsLayer
+      agentsLayerRef.current = new AgentsLayer()
+      world.addChild(agentsLayerRef.current.container)
 
-      // Bubbles layer (above agents, below particles)
-      const bubblesLayer = new BubblesLayer()
-      world.addChild(bubblesLayer.container)
-      bubblesLayerRef.current = bubblesLayer
+      bubblesLayerRef.current = new BubblesLayer()
+      world.addChild(bubblesLayerRef.current.container)
 
-      // Particles layer (topmost world-space layer)
-      const particlesLayer = new ParticlesLayer()
-      world.addChild(particlesLayer.container)
-      particlesLayerRef.current = particlesLayer
+      particlesLayerRef.current = new ParticlesLayer()
+      world.addChild(particlesLayerRef.current.container)
 
       // Bloom filter — stage-level post-processing
       const bloomFilter = new PixiBloomFilter(0.6)
       app.stage.filters = [bloomFilter.filter]
       bloomFilterRef.current = bloomFilter
 
-      // ── Animation loop ─────────────────────────────────────────────
-      // Uses its own rAF for now. Follow-up PR will consolidate to the
-      // shared app.ticker once all layers are migrated.
-      const draw = (timestamp: number) => {
-        if (destroyed) return
-        animRef.current = requestAnimationFrame(draw)
-
-        // Skip rendering when the canvas is off-screen (IntersectionObserver).
-        if (!visibleRef.current && !needsCatchUpRef.current) return
-        needsCatchUpRef.current = false
-
-        const dt = lastFrameRef.current
-          ? (timestamp - lastFrameRef.current) / 1000
-          : 0.016
-        lastFrameRef.current = timestamp
-        timeRef.current += dt
-
-        // Read simulation state from ref — no React re-render needed
-        const s = simulationRef.current
-        const p = drawPropsRef.current
-        p.agents = s.agents
-        p.toolCalls = s.toolCalls
-        p.discoveries = s.discoveries
-        if (s.currentTime != null) simTimeRef.current = s.currentTime
-
-        // Camera physics (inertia + auto-fit)
-        updateCameraRef.current(p.isDragging, p.pauseAutoFit)
-
-        // Floaty agent drag
-        updateDragLerpRef.current(s.agents, p.onAgentDrag)
-
-        // Apply camera transform to the world container
-        applyCameraTransform(world, transformRef.current)
-
-        // Update background layer (behind everything)
-        backgroundLayer.update(
-          p.dimensions.width,
-          p.dimensions.height,
-          transformRef.current,
-          dt,
-          timeRef.current,
-          showHexGrid,
-        )
-
-        // Update edges layer (drawn behind tool calls)
-        edgesLayer.update(
-          s.edges,
-          s.particles,
-          s.agents,
-          s.toolCalls,
-          timeRef.current,
-        )
-
-        // Update tool calls layer (above edges, below discoveries)
-        toolCallsLayer.update(
-          s.toolCalls,
-          timeRef.current,
-          selectedToolCallId,
-        )
-
-        // Update discoveries layer (above tool calls, below agents)
-        discoveriesLayer.update(
-          s.discoveries,
-          s.agents,
-          selectedDiscoveryId,
-        )
-
-        // Update agents layer (above discoveries, below bubbles)
-        agentsLayer.update(
-          s.agents,
-          selectedAgentId,
-          hoveredAgentId,
-          showStats,
-          timeRef.current,
-        )
-
-        // Update bubbles layer (above agents, below particles)
-        bubblesLayer.update(s.agents, timeRef.current)
-
-        // Update particles layer
-        particlesLayer.update(
-          s.particles,
-          s.edges,
-          s.agents,
-          s.toolCalls,
-          timeRef.current,
-        )
-      }
-
-      animRef.current = requestAnimationFrame(draw)
+      // Signal that the draw callback can start rendering.
+      readyRef.current = true
     }
 
     boot()
 
     return () => {
       destroyed = true
-      if (animRef.current) cancelAnimationFrame(animRef.current)
+      readyRef.current = false
       if (backgroundLayerRef.current) {
         backgroundLayerRef.current.dispose()
         backgroundLayerRef.current = null

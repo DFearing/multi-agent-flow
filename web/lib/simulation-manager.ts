@@ -84,6 +84,9 @@ type Listener = () => void
 
 // ── SimulationManager ──────────────────────────────────────────────────────
 
+/** Callback registered by a canvas for per-frame rendering. */
+export type RenderCallback = (timestamp: number) => void
+
 export interface SimulationManager {
   // ── Session lifecycle ───────────────────────────────────────────────────
   /** Register a new session. If it already exists, this is a no-op. */
@@ -113,6 +116,12 @@ export interface SimulationManager {
   saveSnapshot(sessionId: string): { simState: SimulationState; blockId: number }
   restoreSnapshot(sessionId: string, snapshot: { simState: SimulationState; blockId: number }): void
 
+  // ── Render registry ────────────────────────────────────────────────────
+  /** Register a render callback. Called every frame after all session ticks.
+   *  Returns an unregister function. Callbacks are called in registration
+   *  order. */
+  registerRender(callback: RenderCallback): () => void
+
   // ── Subscriptions (useSyncExternalStore compatible) ──────────────────────
   /** Subscribe to changes for a specific session. The listener fires when
    *  structural state changes (new events processed), not every frame. */
@@ -133,6 +142,9 @@ export function createSimulationManager(): SimulationManager {
   const sessions = new Map<string, SessionSubState>()
   const listeners = new Map<string, Set<Listener>>()
   const snapshotVersions = new Map<string, number>()
+
+  /** Ordered list of render callbacks registered by canvases. */
+  const renderCallbacks: RenderCallback[] = []
 
   let rafId = 0
   let lastTimestamp = 0
@@ -424,6 +436,13 @@ export function createSimulationManager(): SimulationManager {
       tickSession(sessionId, sub, timestamp, deltaTime)
     }
 
+    // Call registered render callbacks (canvases) after all simulation ticks.
+    // Iterate a snapshot of the length in case a callback unregisters itself.
+    const cbLen = renderCallbacks.length
+    for (let i = 0; i < cbLen; i++) {
+      renderCallbacks[i](timestamp)
+    }
+
     rafId = requestAnimationFrame(loop)
   }
 
@@ -660,6 +679,14 @@ export function createSimulationManager(): SimulationManager {
       sub.frameState = restored
       syncPhysics(sub.physics, restored.agents, restored.edges)
       notifyListeners(sessionId)
+    },
+
+    registerRender(callback) {
+      renderCallbacks.push(callback)
+      return () => {
+        const idx = renderCallbacks.indexOf(callback)
+        if (idx >= 0) renderCallbacks.splice(idx, 1)
+      }
     },
 
     subscribe(sessionId, listener) {
