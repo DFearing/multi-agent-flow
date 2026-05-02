@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-// Default for unseen workspaces is visible so a fresh session never silently
-// disappears — only an explicit `false` entry hides anything.
+// Default for unseen workspaces is HIDDEN. Auto-mounting every workspace's
+// canvas at page load gets expensive once a few are stored, so users now
+// opt into the workspaces they want to see via the workspace filter UI.
+// Previously-toggled cwds are respected — only entries missing from
+// localStorage default to hidden.
 
 const STORAGE_KEY = 'agent-flow:workspace-filter:v1'
 
@@ -73,7 +76,7 @@ export function useWorkspaceFilter(): WorkspaceFilterAPI {
   const isVisible = useCallback((cwd: string | undefined): boolean => {
     if (!cwd) return true
     const v = visibility[cwd]
-    return v === undefined ? true : v
+    return v === undefined ? false : v
   }, [visibility])
 
   const setVisibility = useCallback((cwd: string, visible: boolean) => {
