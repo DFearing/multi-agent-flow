@@ -92,6 +92,10 @@ export class GlyphAtlas {
     page.ctx.fillStyle = color
     page.ctx.fillText(text, x + ATLAS_PADDING, y + ATLAS_PADDING)
 
+    // Tell Pixi the underlying canvas changed so the GPU texture re-uploads.
+    // Without this, only the glyph baked before the first GPU sample is visible.
+    page.baseTexture.source.update()
+
     // Advance cursor
     page.cursorX += w
     page.rowHeight = Math.max(page.rowHeight, h)
