@@ -79,7 +79,11 @@ export const FloatingPanel = memo(function FloatingPanel({
   onTitleEdit,
   children,
 }: FloatingPanelProps) {
-  const { getPanelRect, setPanelRect, bringToFront, sendPanelToNext, sendPanelToPrev, otherInstances } = usePanelLayout()
+  const {
+    getPanelRect, setPanelRect, bringToFront,
+    sendPanelToNext, sendPanelToPrev, otherInstances,
+    registerMounted, unregisterMounted,
+  } = usePanelLayout()
 
   // Track if we've mounted (for SSR safety with window-based defaults)
   const [mounted, setMounted] = useState(false)
@@ -92,7 +96,9 @@ export const FloatingPanel = memo(function FloatingPanel({
   // Register the panel into the layout map on first mount so layout-wide
   // operations like tilePanels see it even before any drag/resize/click.
   // setPanelRect merges into any existing entry, so this is a no-op when a
-  // stored rect already exists.
+  // stored rect already exists. We also register/unregister against a
+  // separate "mounted" set so tilePanels can distinguish "in the layout map
+  // but parent has visible=false" from "currently rendered".
   const registeredRef = useRef(false)
   useEffect(() => {
     if (registeredRef.current) return
@@ -100,6 +106,16 @@ export const FloatingPanel = memo(function FloatingPanel({
     setPanelRect(id, rawRect)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount with the resolved initial rect
   }, [])
+  // Gate on `visible` AND `!rawRect.hidden` — these are the same conditions
+  // the render below uses to early-return null. Without the gate,
+  // FloatingPanel would register itself even when its parent has hidden it
+  // via the visible prop, and tilePanels would treat it as an active window.
+  const isRendered = visible && !rawRect.hidden
+  useEffect(() => {
+    if (!isRendered) return
+    registerMounted(id)
+    return () => { unregisterMounted(id) }
+  }, [id, isRendered, registerMounted, unregisterMounted])
   const rect: PanelRect = {
     ...rawRect,
     w: Math.max(rawRect.w, minW),

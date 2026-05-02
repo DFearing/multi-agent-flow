@@ -1,16 +1,20 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePanelLayout } from './use-panel-layout'
 
 // Default for unseen workspaces is HIDDEN so a page load that sees a brand
 // new cwd doesn't auto-mount its canvas. Explicit user toggles ARE persisted
 // across reloads, so once a workspace is shown it stays shown.
 //
-// Storage key is versioned: pre-v2 saves used a "visibility" map where the
-// implicit default was `true`. Loading those would re-show every previously
-// seen workspace, which defeats the point — we drop them and start fresh.
+// Storage key is scoped per instance (browser-window/session id from
+// panel-layout) so that each window has its own visibility state. Two tabs
+// of the same app no longer overwrite each other's selections.
+//
+// v3 bumps the schema once again to drop the cross-instance v2 saves, which
+// were single-key globals that caused exactly that interference.
 
-const STORAGE_KEY = 'agent-flow:workspace-filter:v2'
+const STORAGE_PREFIX = 'agent-flow:workspace-filter:v3:'
 
 interface Stored {
   /** Sparse map: missing cwds default to hidden. */
@@ -31,10 +35,10 @@ export interface WorkspaceFilterAPI {
   registerCwd(cwd: string): void
 }
 
-function load(): Stored {
+function load(key: string): Stored {
   if (typeof window === 'undefined') return { visibility: {}, knownCwds: [] }
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(key)
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Stored>
       return {
@@ -46,27 +50,36 @@ function load(): Stored {
   return { visibility: {}, knownCwds: [] }
 }
 
-function save(stored: Stored) {
+function save(key: string, stored: Stored) {
   if (typeof window === 'undefined') return
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(stored)) } catch { /* ignore */ }
+  try { localStorage.setItem(key, JSON.stringify(stored)) } catch { /* ignore */ }
 }
 
 export function useWorkspaceFilter(): WorkspaceFilterAPI {
+  const { instanceId } = usePanelLayout()
+  const storageKey = useMemo(() => `${STORAGE_PREFIX}${instanceId}`, [instanceId])
+  const storageKeyRef = useRef(storageKey)
+  storageKeyRef.current = storageKey
+
   const [visibility, setVisibilityState] = useState<Record<string, boolean>>({})
   const [seen, setSeen] = useState<Set<string>>(() => new Set())
 
-  // Seed both visibility and seen from prior storage on mount.
+  // Seed both visibility and seen from this instance's prior storage on mount
+  // (or whenever the instance id ever changes — practically just once).
   useEffect(() => {
-    const stored = load()
+    const stored = load(storageKey)
     setVisibilityState(stored.visibility)
     setSeen(new Set(stored.knownCwds))
-  }, [])
+  }, [storageKey])
 
-  // Debounced persist
+  // Debounced persist (per-instance)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const scheduleSave = useCallback((vis: Record<string, boolean>, cwds: Set<string>) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => save({ visibility: vis, knownCwds: [...cwds] }), 200)
+    saveTimerRef.current = setTimeout(
+      () => save(storageKeyRef.current, { visibility: vis, knownCwds: [...cwds] }),
+      200,
+    )
   }, [])
   useEffect(() => () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)

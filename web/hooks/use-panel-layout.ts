@@ -46,6 +46,12 @@ export interface PanelLayoutAPI {
    *  width each); `axis: 'horizontal'` lays them side-by-side (full height
    *  each). Hidden panels and the top-bar itself are skipped. */
   tilePanels(axis: 'horizontal' | 'vertical'): void
+  /** Register a FloatingPanel as currently mounted (rendered to the DOM).
+   *  Distinct from the persistent layout map: a panel can have a stored
+   *  rect but be hidden by its parent's `visible` prop, in which case it
+   *  should not participate in layout-wide operations like tilePanels. */
+  registerMounted(id: PanelId): void
+  unregisterMounted(id: PanelId): void
   /** Other live session ids paired with this window (host and/or attachers). */
   otherInstances: string[]
   /** This window's own session id. */
@@ -493,24 +499,41 @@ export function usePanelLayoutState(): PanelLayoutAPI {
   const sendPanelToNext = useCallback((id: PanelId) => sendPanelInDirection(id, 1), [sendPanelInDirection])
   const sendPanelToPrev = useCallback((id: PanelId) => sendPanelInDirection(id, -1), [sendPanelInDirection])
 
+  // Currently-mounted panel IDs. A FloatingPanel calls registerMounted on
+  // mount and unregisterMounted on unmount, including the unmount path that
+  // happens when its parent's `visible` prop flips false. tilePanels uses
+  // this set so tiles only count panels actually rendered to the DOM.
+  const mountedRef = useRef<Set<PanelId>>(new Set())
+  const registerMounted = useCallback((id: PanelId) => {
+    mountedRef.current.add(id)
+  }, [])
+  const unregisterMounted = useCallback((id: PanelId) => {
+    mountedRef.current.delete(id)
+  }, [])
+
   const tilePanels = useCallback((axis: 'horizontal' | 'vertical') => {
     if (typeof window === 'undefined') return
     setPanels(prev => {
       const candidates: PanelId[] = []
-      for (const key of Object.keys(prev) as PanelId[]) {
-        if (key === 'top-bar') continue
-        const r = prev[key]
-        if (!r || r.hidden || r.w <= 0 || r.h <= 0) continue
-        candidates.push(key)
+      for (const id of mountedRef.current) {
+        if (id === 'top-bar') continue
+        const r = prev[id]
+        // Allow panels that registered but haven't written a rect yet —
+        // they'll get one assigned by the tile pass below.
+        if (r?.hidden) continue
+        candidates.push(id)
       }
       if (candidates.length === 0) return prev
 
-      // Stable, intuitive order: sort by current top-left in the tiling axis,
+      // Stable, intuitive order: sort by current top-left in the tiling axis
       // so the panel currently leftmost stays leftmost (horizontal) or
-      // topmost stays topmost (vertical).
+      // topmost stays topmost (vertical). Panels with no rect yet sort to
+      // the end (Infinity).
       candidates.sort((a, b) => {
-        const ra = prev[a]!, rb = prev[b]!
-        return axis === 'horizontal' ? ra.x - rb.x : ra.y - rb.y
+        const ra = prev[a], rb = prev[b]
+        const va = ra ? (axis === 'horizontal' ? ra.x : ra.y) : Infinity
+        const vb = rb ? (axis === 'horizontal' ? rb.x : rb.y) : Infinity
+        return va - vb
       })
 
       const topBar = prev['top-bar']
@@ -524,13 +547,13 @@ export function usePanelLayoutState(): PanelLayoutAPI {
 
       const next: PanelLayoutMap = { ...prev }
       const n = candidates.length
+      const baseFor = (id: PanelId): PanelRect => prev[id] ?? { x: 0, y: 0, w: 100, h: 100, z: 10 }
       if (axis === 'horizontal') {
         const totalGap = gap * (n - 1)
         const slice = Math.floor((availW - totalGap) / n)
         candidates.forEach((id, i) => {
-          const base = prev[id]!
           next[id] = {
-            ...base,
+            ...baseFor(id),
             x: availX + i * (slice + gap),
             y: availY,
             w: slice,
@@ -542,9 +565,8 @@ export function usePanelLayoutState(): PanelLayoutAPI {
         const totalGap = gap * (n - 1)
         const slice = Math.floor((availH - totalGap) / n)
         candidates.forEach((id, i) => {
-          const base = prev[id]!
           next[id] = {
-            ...base,
+            ...baseFor(id),
             x: availX,
             y: availY + i * (slice + gap),
             w: availW,
@@ -561,7 +583,9 @@ export function usePanelLayoutState(): PanelLayoutAPI {
   return {
     getPanelRect, setPanelRect, bringToFront,
     resetLayout, saveLayout, hardResetLayout, hasSavedLayout,
-    sendPanelToNext, sendPanelToPrev, tilePanels, otherInstances, instanceId: INSTANCE_ID,
+    sendPanelToNext, sendPanelToPrev, tilePanels,
+    registerMounted, unregisterMounted,
+    otherInstances, instanceId: INSTANCE_ID,
     isFreshInstance: IS_FRESH_INSTANCE,
     hostId: HOST_ID,
     hostNotFound,
