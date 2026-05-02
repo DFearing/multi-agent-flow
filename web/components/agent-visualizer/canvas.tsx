@@ -23,6 +23,7 @@ import {
 } from './canvas/'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { useCanvasVisibility } from '@/hooks/use-canvas-visibility'
 import { createCanvas2DHitTestAdapter } from '@/hooks/hit-test-adapters'
 import { useSimulationManager } from './simulation-manager-provider'
 
@@ -85,13 +86,8 @@ export function AgentCanvas({
   const toolStatesBRef = useRef<Map<string, string>>(new Map())
   const stateMapsUseARef = useRef(true)
 
-  // IntersectionObserver visibility gating — when true, the canvas is in the
-  // viewport and the render rAF should draw. When false, we skip drawing to
-  // save GPU work while the simulation sub-state keeps ticking.
-  const visibleRef = useRef(true)
-  // Flag: when the canvas re-enters the viewport, force one immediate redraw
-  // to catch up with simulation changes that happened while off-screen.
-  const needsCatchUpRef = useRef(false)
+  // Visibility gating: IntersectionObserver + document.visibilityState
+  const { visibleRef, needsCatchUpRef } = useCanvasVisibility(containerRef, pauseWhenOffscreen)
 
   // Rate-limited error logging for the draw loop (avoid flooding console)
   const lastDrawErrorRef = useRef(0)
@@ -187,29 +183,6 @@ export function AgentCanvas({
     return () => observer.disconnect()
   }, [])
 
-  // ─── IntersectionObserver: pause render rAF when off-screen ─────────────
-  useEffect(() => {
-    if (!pauseWhenOffscreen) {
-      visibleRef.current = true
-      return
-    }
-    const el = containerRef.current
-    if (!el) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const wasVisible = visibleRef.current
-          visibleRef.current = entry.isIntersecting
-          if (!wasVisible && entry.isIntersecting) {
-            needsCatchUpRef.current = true
-          }
-        }
-      },
-      { threshold: 0 },
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [pauseWhenOffscreen])
 
   // ─── Detect state changes → spawn effects ──────────────────────────────
 
