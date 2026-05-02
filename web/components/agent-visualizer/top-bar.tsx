@@ -7,6 +7,7 @@ import { formatTokens } from "@/lib/utils"
 import { agentCost } from "./canvas/draw-cost"
 import { SessionTabs } from "./session-tabs"
 import { FloatingPanel } from "./floating-panel"
+import { FPSIndicator } from "./fps-indicator"
 import { usePanelLayout } from "@/hooks/use-panel-layout"
 import type { WorkspaceFilterAPI } from "@/hooks/use-workspace-filter"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
@@ -228,6 +229,7 @@ export const TopBar = memo(function TopBar({
 
         {/* Right-side info/controls */}
         <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
+          <FPSIndicator />
           {isVSCode && <ConnectionIndicator status={connectionStatus} />}
 
           {/* Panel toggle group */}
