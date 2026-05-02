@@ -18,6 +18,7 @@ import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
 import { createPixiApp, disposeTextureCache } from './pixi-app'
+import { AgentsLayer } from './agents-layer'
 import { EdgesLayer } from './edges-layer'
 import { ParticlesLayer } from './particles-layer'
 import { applyCameraTransform } from './camera'
@@ -47,9 +48,7 @@ interface CanvasProps {
 export function PixiCanvas({
   simulationRef,
   selectedAgentId,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   hoveredAgentId,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   showStats,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   showHexGrid,
@@ -71,6 +70,7 @@ export function PixiCanvas({
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
+  const agentsLayerRef = useRef<AgentsLayer | null>(null)
   const edgesLayerRef = useRef<EdgesLayer | null>(null)
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
   const worldRef = useRef<Container | null>(null)
@@ -228,12 +228,17 @@ export function PixiCanvas({
       app.stage.addChild(world)
       worldRef.current = world
 
-      // Edges layer (behind particles in z-order, matching Canvas2D draw order)
+      // Edges layer (behind agents in z-order, matching Canvas2D draw order)
       const edgesLayer = new EdgesLayer()
       world.addChild(edgesLayer.container)
       edgesLayerRef.current = edgesLayer
 
-      // Particles layer (functional)
+      // Agents layer (above edges, below particles)
+      const agentsLayer = new AgentsLayer()
+      world.addChild(agentsLayer.container)
+      agentsLayerRef.current = agentsLayer
+
+      // Particles layer (topmost world-space layer)
       const particlesLayer = new ParticlesLayer()
       world.addChild(particlesLayer.container)
       particlesLayerRef.current = particlesLayer
@@ -268,12 +273,21 @@ export function PixiCanvas({
         // Apply camera transform to the world container
         applyCameraTransform(world, transformRef.current)
 
-        // Update edges layer (drawn behind particles)
+        // Update edges layer (drawn behind agents)
         edgesLayer.update(
           s.edges,
           s.particles,
           s.agents,
           s.toolCalls,
+          timeRef.current,
+        )
+
+        // Update agents layer (above edges, below particles)
+        agentsLayer.update(
+          s.agents,
+          selectedAgentId,
+          hoveredAgentId,
+          showStats,
           timeRef.current,
         )
 
@@ -295,6 +309,10 @@ export function PixiCanvas({
     return () => {
       destroyed = true
       if (animRef.current) cancelAnimationFrame(animRef.current)
+      if (agentsLayerRef.current) {
+        agentsLayerRef.current.dispose()
+        agentsLayerRef.current = null
+      }
       if (edgesLayerRef.current) {
         edgesLayerRef.current.dispose()
         edgesLayerRef.current = null
