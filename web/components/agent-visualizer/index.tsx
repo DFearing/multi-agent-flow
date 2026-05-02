@@ -419,7 +419,7 @@ function AgentVisualizerInner() {
             onContextMenu={selection.handleContextMenu}
             onToolCallClick={selection.handleToolCallClick}
             onDiscoveryClick={selection.handleDiscoveryClick}
-            onClose={() => hideCanvas(session.id)}
+            onClose={hideCanvas}
           />
         )
       })}

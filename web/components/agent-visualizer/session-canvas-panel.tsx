@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSessionSimulation } from '@/hooks/use-session-simulation'
 import { useSimulationManager } from './simulation-manager-provider'
 import { useFrameRefSelector } from '@/hooks/use-frame-ref-selector'
@@ -56,10 +56,12 @@ interface SessionCanvasPanelProps {
   onContextMenu: (e: React.MouseEvent, type: 'agent' | 'edge' | 'canvas', id?: string) => void
   onToolCallClick?: (toolCallId: string | null) => void
   onDiscoveryClick?: (discoveryId: string | null) => void
-  onClose?: () => void
+  /** Called with the panel's sessionId so the parent can use one stable
+   *  callback instead of allocating a new arrow per panel per render. */
+  onClose?: (sessionId: string) => void
 }
 
-export function SessionCanvasPanel({
+function SessionCanvasPanelImpl({
   sessionId,
   sessionLabel,
   slot,
@@ -88,6 +90,10 @@ export function SessionCanvasPanel({
   useEffect(() => {
     sim.play()
   }, [sim.play])
+
+  // Stabilize the FloatingPanel close callback so React.memo on this
+  // component isn't defeated by parents passing a fresh arrow each render.
+  const handleClose = useCallback(() => onClose?.(sessionId), [onClose, sessionId])
 
   const { setSessionStats, removeSessionStats } = useSessionStatsDispatch()
 
@@ -262,7 +268,7 @@ export function SessionCanvasPanel({
       title={displayTitle}
       accentColor={sessionColor.accent}
       onTitleEdit={(next) => setName(sessionId, next)}
-      onClose={onClose}
+      onClose={onClose ? handleClose : undefined}
       noContentZoom
     >
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: sessionColor.tint }}>
@@ -332,3 +338,11 @@ export function SessionCanvasPanel({
     </FloatingPanel>
   )
 }
+
+// React.memo so SSE event-version bumps in the parent (which fan out to
+// every panel via setEventVersion → AgentVisualizerInner re-render) don't
+// re-render panels whose props haven't actually changed. The relevant
+// changes for any one panel are: its own session's events (consumed via
+// the externalEvents pipeline inside the impl), selection state, panel
+// toggles, and resize triggers. All other parent re-renders should skip.
+export const SessionCanvasPanel = memo(SessionCanvasPanelImpl)
