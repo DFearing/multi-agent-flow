@@ -102,7 +102,7 @@ export function CanvasZoomControl({
         Floors this canvas&apos;s auto-fit zoom at the chosen level.
         Set to 200% to lock at the upper cap. Wheel zoom is unaffected.
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: 12, gap: 8 }}>
         <button
           onClick={() => { onChange(0); setOpen(false) }}
           disabled={value === 0}
