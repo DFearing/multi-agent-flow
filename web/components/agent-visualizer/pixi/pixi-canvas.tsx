@@ -12,12 +12,13 @@
  * Effects layer (spawn/complete FX) is the only remaining TODO.
  */
 
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import type { Application } from 'pixi.js'
 import { Container } from 'pixi.js'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { createPixiHitTestAdapter } from '@/hooks/hit-test-adapters'
 import { createPixiApp, disposeTextureCache } from './pixi-app'
 import { BackgroundLayer } from './background-layer'
 import { AgentsLayer } from './agents-layer'
@@ -201,11 +202,20 @@ export function PixiCanvas({
   })
 
   // ─── Interaction ────────────────────────────────────────────────────────
+  // ─── Hit-detection adapter (Pixi path) ──────────────────────────────────
+  // Stable across renders — the adapter closes over refs, not values.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const hitTestAdapter = useMemo(
+    () => createPixiHitTestAdapter(drawPropsRef, simTimeRef),
+    [],
+  )
+
   const {
     isDragging, handlers, updateDragLerp,
   } = useCanvasInteraction({
     drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
     simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef,
+    hitTestAdapter,
   })
 
   // Keep drawPropsRef in sync with interaction state

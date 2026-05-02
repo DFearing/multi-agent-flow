@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
@@ -23,6 +23,7 @@ import {
 } from './canvas/'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { createCanvas2DHitTestAdapter } from '@/hooks/hit-test-adapters'
 import { useSimulationManager } from './simulation-manager-provider'
 
 interface CanvasProps {
@@ -140,12 +141,21 @@ export function AgentCanvas({
     minZoomLevel,
   })
 
+  // ─── Hit-detection adapter (Canvas2D path) ──────────────────────────────
+  // Stable across renders — the adapter closes over refs, not values.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const hitTestAdapter = useMemo(
+    () => createCanvas2DHitTestAdapter(drawPropsRef, simTimeRef),
+    [],
+  )
+
   // ─── Interaction ────────────────────────────────────────────────────────
   const {
     isDragging, handlers, updateDragLerp,
   } = useCanvasInteraction({
     drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
     simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef,
+    hitTestAdapter,
   })
 
   // Keep drawPropsRef in sync with interaction state

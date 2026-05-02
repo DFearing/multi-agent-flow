@@ -9,6 +9,23 @@ import {
 } from '@/components/agent-visualizer/canvas/index'
 import type { Transform } from './use-canvas-camera'
 
+/**
+ * Renderer-agnostic hit-detection adapter.
+ *
+ * Each function takes world-space (canvas-local) coordinates and returns
+ * the id of the hit entity, or null.
+ *
+ * The Canvas2D path supplies functions that iterate agent/tool-call/discovery
+ * data structures directly. The Pixi path can supply functions that use
+ * Pixi's event system or iterate display-object containers.
+ */
+export interface HitTestAdapter {
+  findAgentAt: (x: number, y: number) => string | null
+  findToolCallAt: (x: number, y: number) => string | null
+  findBubbleAgentAt: (x: number, y: number) => string | null
+  findDiscoveryAt: (x: number, y: number) => string | null
+}
+
 interface InteractionCallbacks {
   onAgentClick: (agentId: string | null) => void
   onAgentHover: (agentId: string | null) => void
@@ -48,6 +65,11 @@ interface InteractionOptions {
   screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number }
   doZoomToFit: () => void
   mainCanvasRef: MutableRefObject<HTMLElement | null>
+  /** Optional renderer-specific hit-detection adapter. When omitted, the hook
+   *  falls back to the Canvas2D coordinate-math functions. The Pixi path
+   *  supplies an adapter that can use Pixi's event system or iterate
+   *  display-object containers. */
+  hitTestAdapter?: HitTestAdapter
 }
 
 export function useCanvasInteraction({
@@ -59,6 +81,7 @@ export function useCanvasInteraction({
   screenToCanvas,
   doZoomToFit,
   mainCanvasRef,
+  hitTestAdapter,
 }: InteractionOptions) {
   const [isDragging, setIsDragging] = useState(false)
   const isDraggingRef = useRef(false)
@@ -72,23 +95,27 @@ export function useCanvasInteraction({
   const lastPanPosRef = useRef({ x: 0, y: 0, time: 0 })
   const lastHoveredIdRef = useRef<string | null>(null)
 
-  // ─── Hit detection wrappers ─────────────────────────────────────────────
+  // ─── Hit detection — renderer-agnostic adapter or Canvas2D fallback ─────
 
   const findAgentAt = useCallback((x: number, y: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findAgentAt(x, y)
     return findAgentAtPure(x, y, drawPropsRef.current.agents)
-  }, [drawPropsRef])
+  }, [drawPropsRef, hitTestAdapter])
 
   const findToolCallAt = useCallback((x: number, y: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findToolCallAt(x, y)
     return findToolCallAtPure(x, y, drawPropsRef.current.toolCalls)
-  }, [drawPropsRef])
+  }, [drawPropsRef, hitTestAdapter])
 
   const findBubbleAgentAt = useCallback((x: number, y: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findBubbleAgentAt(x, y)
     return findBubbleAgentAtPure(x, y, drawPropsRef.current.agents, simTimeRef.current)
-  }, [drawPropsRef, simTimeRef])
+  }, [drawPropsRef, simTimeRef, hitTestAdapter])
 
   const findDiscoveryAt = useCallback((x: number, y: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findDiscoveryAt(x, y)
     return findDiscoveryAtPure(x, y, drawPropsRef.current.discoveries)
-  }, [drawPropsRef])
+  }, [drawPropsRef, hitTestAdapter])
 
   // ─── Mouse Handlers ─────────────────────────────────────────────────────
 
