@@ -22,6 +22,7 @@ import { AgentsLayer } from './agents-layer'
 import { EdgesLayer } from './edges-layer'
 import { ToolCallsLayer } from './tool-calls-layer'
 import { DiscoveriesLayer } from './discoveries-layer'
+import { BubblesLayer } from './bubbles-layer'
 import { ParticlesLayer } from './particles-layer'
 import { applyCameraTransform } from './camera'
 
@@ -74,6 +75,7 @@ export function PixiCanvas({
   const edgesLayerRef = useRef<EdgesLayer | null>(null)
   const toolCallsLayerRef = useRef<ToolCallsLayer | null>(null)
   const discoveriesLayerRef = useRef<DiscoveriesLayer | null>(null)
+  const bubblesLayerRef = useRef<BubblesLayer | null>(null)
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
   const worldRef = useRef<Container | null>(null)
   const animRef = useRef<number>(0)
@@ -245,10 +247,15 @@ export function PixiCanvas({
       world.addChild(discoveriesLayer.container)
       discoveriesLayerRef.current = discoveriesLayer
 
-      // Agents layer (above discoveries, below particles)
+      // Agents layer (above discoveries, below bubbles)
       const agentsLayer = new AgentsLayer()
       world.addChild(agentsLayer.container)
       agentsLayerRef.current = agentsLayer
+
+      // Bubbles layer (above agents, below particles)
+      const bubblesLayer = new BubblesLayer()
+      world.addChild(bubblesLayer.container)
+      bubblesLayerRef.current = bubblesLayer
 
       // Particles layer (topmost world-space layer)
       const particlesLayer = new ParticlesLayer()
@@ -308,7 +315,7 @@ export function PixiCanvas({
           selectedDiscoveryId,
         )
 
-        // Update agents layer (above discoveries, below particles)
+        // Update agents layer (above discoveries, below bubbles)
         agentsLayer.update(
           s.agents,
           selectedAgentId,
@@ -316,6 +323,9 @@ export function PixiCanvas({
           showStats,
           timeRef.current,
         )
+
+        // Update bubbles layer (above agents, below particles)
+        bubblesLayer.update(s.agents, timeRef.current)
 
         // Update particles layer
         particlesLayer.update(
@@ -346,6 +356,10 @@ export function PixiCanvas({
       if (discoveriesLayerRef.current) {
         discoveriesLayerRef.current.dispose()
         discoveriesLayerRef.current = null
+      }
+      if (bubblesLayerRef.current) {
+        bubblesLayerRef.current.dispose()
+        bubblesLayerRef.current = null
       }
       if (edgesLayerRef.current) {
         edgesLayerRef.current.dispose()
