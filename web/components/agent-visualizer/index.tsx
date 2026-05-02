@@ -1,7 +1,10 @@
 "use client"
 
-import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react"
+import { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import { usePersistedState } from "@/hooks/use-persisted-state"
+import { useSessionSimulation } from "@/hooks/use-session-simulation"
+import { useSimulationManager } from "./simulation-manager-provider"
+import { SimulationManagerProvider } from "./simulation-manager-provider"
 import { useAgentSimulation } from "@/hooks/use-agent-simulation"
 import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
@@ -35,11 +38,13 @@ import { usePanelLayout } from "@/hooks/use-panel-layout"
 export function AgentVisualizer() {
   return (
     <PanelLayoutProvider>
-      <SessionStatsProvider>
-        <SessionNamesProvider>
-          <AgentVisualizerInner />
-        </SessionNamesProvider>
-      </SessionStatsProvider>
+      <SimulationManagerProvider>
+        <SessionStatsProvider>
+          <SessionNamesProvider>
+            <AgentVisualizerInner />
+          </SessionNamesProvider>
+        </SessionStatsProvider>
+      </SimulationManagerProvider>
     </PanelLayoutProvider>
   )
 }
@@ -60,6 +65,32 @@ function AgentVisualizerInner() {
 
   if (hostNotFound) return <HostNotFoundScreen hostId={hostId} />
 
+  // In live multi-session mode, each SessionCanvasPanel drives its own
+  // simulation via the shared SimulationManager. The global hook here
+  // reads the *selected session's* state from the manager so the
+  // selection-related panels (chat, transcript, file attention, timeline)
+  // have data — without running a duplicate event pipeline.
+  //
+  // In mock/demo mode (no live sessions), we fall back to the old
+  // useAgentSimulation which plays through MOCK_SCENARIO.
+  const manager = useSimulationManager()
+
+  // Selected session's simulation state (from the shared manager).
+  // No externalEvents here — SessionCanvasPanel pushes events for each
+  // session independently. This hook is a read-only subscription.
+  const selectedSessionId = bridge.selectedSessionId ?? '__mock__'
+  const selectedSim = useSessionSimulation(manager, selectedSessionId)
+
+  // Keep the old useAgentSimulation for mock/demo mode only.
+  const mockSim = useAgentSimulation({
+    useMockData: bridge.useMockData,
+    externalEvents: undefined,
+    onExternalEventsConsumed: undefined,
+    disable1MContext: bridge.disable1MContext,
+  })
+
+  // Pick the right simulation source based on mode.
+  const sim = bridge.useMockData ? mockSim : selectedSim
   const {
     agents,
     toolCalls,
@@ -73,19 +104,7 @@ function AgentVisualizerInner() {
     pause,
     restart,
     setSpeed,
-    updateAgentPosition,
-    saveSnapshot,
-    restoreSnapshot,
-  } = useAgentSimulation({
-    useMockData: bridge.useMockData,
-    externalEvents: bridge.pendingEvents,
-    onExternalEventsConsumed: bridge.consumeEvents,
-    sessionFilter: bridge.selectedSessionId,
-    // Pass the ref that's updated synchronously in session-started handler,
-    // so the animation frame never uses a stale filter value.
-    sessionFilterRef: bridge.selectedSessionIdRef,
-    disable1MContext: bridge.disable1MContext,
-  })
+  } = sim
 
   const selection = useSelectionState({ agents, toolCalls, discoveries })
 
@@ -159,37 +178,11 @@ function AgentVisualizerInner() {
     return () => clearTimeout(timer)
   }, [play])
 
-  // Per-session state cache: save/restore simulation state on tab switch
-  // so sessions stay up to date and switching is instant.
-  // useLayoutEffect ensures restart happens synchronously before any animation
-  // frame can consume and discard events from pendingEventsRef.
-  const sessionCacheRef = useRef<Map<string, { snapshot: ReturnType<typeof saveSnapshot>; eventCount: number }>>(new Map())
-  const prevSelectedRef = useRef<string | null>(null)
-  useLayoutEffect(() => {
-    if (bridge.selectedSessionId && bridge.selectedSessionId !== prevSelectedRef.current) {
-      // Save outgoing session state (if any)
-      if (prevSelectedRef.current !== null) {
-        sessionCacheRef.current.set(prevSelectedRef.current, {
-          snapshot: saveSnapshot(),
-          eventCount: bridge.getSessionEventCount(prevSelectedRef.current),
-        })
-      }
-
-      // Restore or cold-start the incoming session, then flush events.
-      // Flushing happens HERE (after state swap) to prevent the animation
-      // frame from processing events in the wrong simulation context.
-      const cached = sessionCacheRef.current.get(bridge.selectedSessionId)
-      if (cached) {
-        restoreSnapshot(cached.snapshot)
-        bridge.flushSessionEvents(bridge.selectedSessionId, cached.eventCount)
-      } else {
-        restart()
-        bridge.flushSessionEvents(bridge.selectedSessionId)
-      }
-
-      prevSelectedRef.current = bridge.selectedSessionId
-    }
-  }, [bridge.selectedSessionId, restart, bridge.flushSessionEvents, saveSnapshot, restoreSnapshot, bridge.getSessionEventCount])
+  // With the shared SimulationManager, each session keeps its own state
+  // alive in parallel. Tab switches just read a different session from the
+  // manager — no save/restore dance needed. The selectedSim subscription
+  // above automatically re-subscribes to the new session when
+  // bridge.selectedSessionId changes.
 
   // Spacebar toggles the global simulation that powers selection / file-attention /
   // transcript panels. Per-canvas play/pause is handled by each canvas's own
@@ -274,14 +267,14 @@ function AgentVisualizerInner() {
 
   const handleCloseSession = useCallback((id: string) => {
     bridge.removeSession(id)
-    sessionCacheRef.current.delete(id)
+    manager.removeSession(id)
     if (bridge.selectedSessionId === id) {
       const remaining = bridge.sessions.filter(s => s.id !== id)
       if (remaining.length > 0) {
         bridge.selectSession(remaining[remaining.length - 1].id)
       }
     }
-  }, [bridge])
+  }, [bridge, manager])
 
   // Hoisted from the SessionCanvasPanel map to avoid inline arrow allocations.
   // The child already passes (agentId, sessionId) so we can handle both args.
@@ -413,7 +406,6 @@ function AgentVisualizerInner() {
             getSessionEventLog={bridge.getSessionEventLog}
             onAgentClick={handleCanvasAgentClick}
             onAgentHover={selection.setHoveredAgentId}
-            onAgentDrag={updateAgentPosition}
             onContextMenu={selection.handleContextMenu}
             onToolCallClick={selection.handleToolCallClick}
             onDiscoveryClick={selection.handleDiscoveryClick}
