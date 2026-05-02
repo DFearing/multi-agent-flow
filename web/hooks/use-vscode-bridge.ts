@@ -102,7 +102,12 @@ export function useVSCodeBridge(): BridgeHookResult {
     if (!isStandalone && (process.env.NODE_ENV !== 'development' || process.env.NEXT_PUBLIC_DEMO !== '0')) return
 
     const relayPort = process.env.NEXT_PUBLIC_RELAY_PORT || ''
-    const es = new EventSource(relayPort ? `http://127.0.0.1:${relayPort}/events` : '/events')
+    // Use the page's hostname so the SSE connection works whether the user
+    // is loading Next over localhost, a LAN IP, or a Tailscale/SSH-forward
+    // hostname. Falls back to '/events' (relative) when no port is set —
+    // standalone-app mode serves the relay from the same origin.
+    const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'
+    const es = new EventSource(relayPort ? `http://${host}:${relayPort}/events` : '/events')
 
     es.onopen = () => {
       setConnectionStatus('connected')

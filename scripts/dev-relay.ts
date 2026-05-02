@@ -40,8 +40,12 @@ async function main() {
     res.end('Agent Flow Dev Relay')
   })
 
-  server.listen(DEFAULT_RELAY_PORT, '127.0.0.1', () => {
-    console.log(`\nSSE relay on http://127.0.0.1:${DEFAULT_RELAY_PORT}/events`)
+  // Dev-only: bind to all interfaces so the relay is reachable from a
+  // browser loading the Next dev server over LAN / Tailscale / SSH-forward.
+  // Override with AGENT_FLOW_DEV_RELAY_HOST=127.0.0.1 to lock to loopback.
+  const host = process.env.AGENT_FLOW_DEV_RELAY_HOST || '0.0.0.0'
+  server.listen(DEFAULT_RELAY_PORT, host, () => {
+    console.log(`\nSSE relay on http://${host}:${DEFAULT_RELAY_PORT}/events`)
     console.log('Ready! Events will appear in the web app.')
   })
 
