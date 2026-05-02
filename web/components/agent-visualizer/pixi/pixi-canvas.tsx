@@ -1,14 +1,15 @@
 'use client'
 
 /**
- * PixiCanvas — WebGL-based sibling to AgentCanvas.
+ * PixiCanvas -- WebGL-based sibling to AgentCanvas.
  *
  * Gated behind `?renderer=pixi`. Same prop contract as AgentCanvas so the
  * two are interchangeable in session-canvas-panel.tsx.
  *
- * This spike PR implements only the **particles** layer at visual parity.
- * All other layers (edges, agents, tool calls, discoveries, bubbles, bloom,
- * depth particles, hex grid) are stubbed as TODOs.
+ * All rendering layers are implemented:
+ *   background -> edges -> tool-calls -> discoveries -> agents -> bubbles -> particles
+ * Bloom post-processing is applied as a stage-level filter.
+ * Effects layer (spawn/complete FX) is the only remaining TODO.
  */
 
 import { useRef, useEffect, useState } from 'react'
@@ -18,6 +19,7 @@ import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
 import { createPixiApp, disposeTextureCache } from './pixi-app'
+import { BackgroundLayer } from './background-layer'
 import { AgentsLayer } from './agents-layer'
 import { EdgesLayer } from './edges-layer'
 import { ToolCallsLayer } from './tool-calls-layer'
@@ -54,7 +56,6 @@ export function PixiCanvas({
   selectedAgentId,
   hoveredAgentId,
   showStats,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   showHexGrid,
   zoomToFitTrigger,
   pauseAutoFit,
@@ -72,6 +73,7 @@ export function PixiCanvas({
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
+  const backgroundLayerRef = useRef<BackgroundLayer | null>(null)
   const agentsLayerRef = useRef<AgentsLayer | null>(null)
   const edgesLayerRef = useRef<EdgesLayer | null>(null)
   const toolCallsLayerRef = useRef<ToolCallsLayer | null>(null)
@@ -183,18 +185,11 @@ export function PixiCanvas({
   // Keep drawPropsRef in sync with interaction state
   drawPropsRef.current.isDragging = isDragging
 
-  // ─── Scene graph layers (stubs marked with TODO) ────────────────────────
-  // Each layer is a Container added to the stage in z-order.
-  // Only the particles layer is functional in this spike.
-
-  // TODO: background-layer (depth particles + hex grid)
-  // edges-layer (MeshRope) — implemented
-  // TODO: agents-layer (sprite + text)
-  // TODO: tool-calls-layer (sprite + text)
-  // TODO: discoveries-layer (sprite + text)
-  // TODO: bubbles-layer (message bubbles)
+  // ─── Scene graph layers ─────────────────────────────────────────────────
+  // Each layer is a Container added to the stage in z-order:
+  // background -> edges -> tool-calls -> discoveries -> agents -> bubbles -> particles
+  // Bloom filter applied at stage level.
   // TODO: effects-layer (spawn/complete FX)
-  // TODO: bloom pass (full-screen shader)
 
   // ─── Bootstrap ──────────────────────────────────────────────────────────
 
@@ -233,6 +228,11 @@ export function PixiCanvas({
       world.label = 'world'
       app.stage.addChild(world)
       worldRef.current = world
+
+      // Background layer (behind everything)
+      const backgroundLayer = new BackgroundLayer()
+      world.addChild(backgroundLayer.container)
+      backgroundLayerRef.current = backgroundLayer
 
       // Edges layer (behind tool calls in z-order, matching Canvas2D draw order)
       const edgesLayer = new EdgesLayer()
@@ -299,6 +299,16 @@ export function PixiCanvas({
         // Apply camera transform to the world container
         applyCameraTransform(world, transformRef.current)
 
+        // Update background layer (behind everything)
+        backgroundLayer.update(
+          p.dimensions.width,
+          p.dimensions.height,
+          transformRef.current,
+          dt,
+          timeRef.current,
+          showHexGrid,
+        )
+
         // Update edges layer (drawn behind tool calls)
         edgesLayer.update(
           s.edges,
@@ -352,6 +362,10 @@ export function PixiCanvas({
     return () => {
       destroyed = true
       if (animRef.current) cancelAnimationFrame(animRef.current)
+      if (backgroundLayerRef.current) {
+        backgroundLayerRef.current.dispose()
+        backgroundLayerRef.current = null
+      }
       if (agentsLayerRef.current) {
         agentsLayerRef.current.dispose()
         agentsLayerRef.current = null
