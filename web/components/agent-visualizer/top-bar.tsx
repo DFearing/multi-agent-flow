@@ -191,8 +191,8 @@ export const TopBar = memo(function TopBar({
           title={`Session: ${instanceId}${hostId ? `\nHost: ${hostId}` : ''}\nPeers: ${otherInstances.length === 0 ? '(none)' : otherInstances.join(', ')}`}
           className="flex-shrink-0"
           style={{
-            height: 26, padding: '0 10px',
-            fontSize: 11, lineHeight: '26px',
+            height: 32, padding: '0 14px',
+            fontSize: 13, lineHeight: '32px',
             background: 'rgba(100, 200, 255, 0.06)',
             border: '1px solid rgba(100, 200, 255, 0.18)',
             color: COLORS.textPrimary,
@@ -224,27 +224,26 @@ export const TopBar = memo(function TopBar({
           )}
         </div>
 
+        <FPSIndicator />
+
         {/* Spacer pushes info to the right */}
         <div className="flex-1" />
 
         {/* Right-side info/controls */}
         <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
-          <FPSIndicator />
           {isVSCode && <ConnectionIndicator status={connectionStatus} />}
 
-          {/* Panel toggle group */}
-          <div className="flex items-center gap-1 px-1 py-0.5 rounded" style={{
-            background: COLORS.holoBg03,
-            border: `1px solid ${COLORS.holoBorder06}`,
-          }}>
-            <ToggleButton active={showMessageFeed} onClick={() => onTogglePanel('messages')} style={{ background: showMessageFeed ? undefined : 'transparent', border: 'none' }}>Messages</ToggleButton>
-            <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>Files</ToggleButton>
-            <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Chat</ToggleButton>
+          {/* Panel toggle group — kept tightly spaced via inner gap-1, but each
+              button uses the default ToggleButton style for visual consistency
+              with the rest of the top bar. */}
+          <div className="flex items-center gap-1">
+            <ToggleButton active={showMessageFeed} onClick={() => onTogglePanel('messages')}>Messages</ToggleButton>
+            <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')}>Files</ToggleButton>
+            <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')}>Chat</ToggleButton>
             <ToggleButton
               active={showCostOverlay}
               onClick={() => onTogglePanel('cost')}
               activeColor={{ bg: COLORS.costActiveBg, text: COLORS.complete }}
-              style={{ background: showCostOverlay ? undefined : 'transparent', border: 'none' }}
             >
               $Cost
             </ToggleButton>
@@ -252,9 +251,6 @@ export const TopBar = memo(function TopBar({
 
           {/* Independent toggles */}
           <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
-          <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
-            {isMuted ? <MutedIcon /> : <UnmutedIcon />}
-          </ToggleButton>
           <WorkspaceFilterButton
             workspaceFilter={workspaceFilter}
             sessions={allSessions}
@@ -289,6 +285,9 @@ export const TopBar = memo(function TopBar({
           </div>
           <ToggleButton active={false} onClick={() => { onUiClick?.('save'); saveLayout() }}>Save UI</ToggleButton>
           <ToggleButton active={false} onClick={() => { onUiClick?.('reset'); handleReset() }}>Reset UI</ToggleButton>
+          <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
+            {isMuted ? <MutedIcon /> : <UnmutedIcon />}
+          </ToggleButton>
         </div>
       </div>
     </FloatingPanel>
@@ -361,8 +360,10 @@ function WorkspaceFilterButton({
     }
   }, [sessions, onRemoveSession])
 
+  const totalCount = knownWorkspaces.length
   const hiddenCount = knownWorkspaces.filter(w => !isVisible(w)).length
-  const labelStr = hiddenCount > 0 ? `Workspaces (${hiddenCount} hidden)` : 'Workspaces'
+  const visibleCount = totalCount - hiddenCount
+  const labelStr = totalCount > 0 ? `Workspaces (${visibleCount}/${totalCount})` : 'Workspaces'
 
   const popoverContent = (
     <div
@@ -371,8 +372,8 @@ function WorkspaceFilterButton({
         position: 'fixed',
         top: anchorRect?.top ?? 0,
         right: anchorRect?.right ?? 0,
-        minWidth: 320,
-        maxHeight: 360,
+        minWidth: 560,
+        maxHeight: 420,
         overflowY: 'auto',
         padding: 8,
         background: COLORS.panelBg,
@@ -385,12 +386,12 @@ function WorkspaceFilterButton({
       }}
     >
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-mono" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
-              SHOW WORKSPACES
+            <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
+              AVAILABLE WORKSPACES
             </span>
             <button
               onClick={showAll}
-              className="text-[9px] font-mono"
+              className="text-[11px] font-mono"
               style={{ color: COLORS.holoBase, background: 'none', border: 'none', cursor: 'pointer' }}
             >
               show all
@@ -398,7 +399,7 @@ function WorkspaceFilterButton({
           </div>
 
           {knownWorkspaces.length === 0 ? (
-            <div className="text-[10px] font-mono py-2 px-1" style={{ color: COLORS.textMuted }}>
+            <div className="text-[12px] font-mono py-2 px-1" style={{ color: COLORS.textMuted }}>
               No workspaces detected yet. Sessions from new cwds will appear here.
             </div>
           ) : (
@@ -430,13 +431,13 @@ function WorkspaceFilterButton({
                     style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
                   />
                   <span
-                    className="flex-1 text-[10px] font-mono truncate"
+                    className="flex-1 text-[13px] font-mono truncate"
                     style={{ color: visible ? COLORS.textPrimary : COLORS.textMuted }}
                   >
                     {shortenPath(cwd)}
                   </span>
                   <span
-                    className="text-[9px] font-mono"
+                    className="text-[16px] font-mono"
                     style={{ color: COLORS.textMuted }}
                     title={`${active} active, ${staleCount} stale`}
                   >
@@ -453,7 +454,7 @@ function WorkspaceFilterButton({
                     title={staleCount > 0
                       ? `Remove ${staleCount} inactive session${staleCount === 1 ? '' : 's'}`
                       : 'No inactive sessions to clear'}
-                    className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                    className="text-[11px] font-mono px-1.5 py-0.5 rounded"
                     style={{
                       background: staleCount > 0 ? COLORS.holoBg05 : 'transparent',
                       border: `1px solid ${staleCount > 0 ? COLORS.holoBorder06 : 'transparent'}`,
@@ -467,7 +468,7 @@ function WorkspaceFilterButton({
                   <button
                     onClick={(e) => { e.stopPropagation(); isolate(cwd) }}
                     title="Show only this workspace"
-                    className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                    className="text-[11px] font-mono px-1.5 py-0.5 rounded"
                     style={{
                       background: COLORS.holoBg05,
                       border: `1px solid ${COLORS.holoBorder06}`,
