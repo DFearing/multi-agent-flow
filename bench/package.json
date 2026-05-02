@@ -1,0 +1,11 @@
+{
+  "name": "agent-flow-bench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "node run-bench.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}
