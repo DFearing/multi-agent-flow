@@ -356,10 +356,13 @@ function PerfButton({
     return () => window.removeEventListener('mousedown', handler)
   }, [open])
 
-  // Effect toggles only flow into the Pixi renderer; on Canvas2D they're
-  // visible in the UI but no-ops, so we hide them entirely off the Pixi path.
-  const showEffects = IS_PIXI_RENDERER
-  const offCount = showEffects ? Object.values(effects).filter(v => !v).length : 0
+  // Bloom toggle applies to both Canvas2D and Pixi renderers.
+  // Other effect toggles (particles, bubbles, backgroundParticles) only flow
+  // into the Pixi renderer, so they're hidden on the Canvas2D path.
+  const showAllEffects = IS_PIXI_RENDERER
+  const offCount = showAllEffects
+    ? Object.values(effects).filter(v => !v).length
+    : (effects.bloom ? 0 : 1)
   const capLabel = FRAME_CAP_OPTIONS.find(o => o.value === frameCap)?.label ?? 'Uncapped'
   const summary = offCount > 0
     ? `Perf · ${capLabel} · ${offCount} off`
@@ -402,32 +405,30 @@ function PerfButton({
         ))}
       </select>
 
-      {showEffects && (
-        <>
-          <div className="text-[10px] font-mono mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
-            EFFECTS
-          </div>
-          {(Object.keys(EFFECT_LABELS) as Array<keyof EffectToggles>).map(key => (
-            <label
-              key={key}
-              className="flex items-center gap-2 py-1 px-1 rounded cursor-pointer"
-              style={{ color: effects[key] ? COLORS.textPrimary : COLORS.textMuted }}
-            >
-              <input
-                type="checkbox"
-                checked={effects[key]}
-                onChange={(e) => onEffectChange(key, e.target.checked)}
-                style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
-              />
-              <span className="text-[10px] font-mono">{EFFECT_LABELS[key]}</span>
-            </label>
-          ))}
-        </>
-      )}
+      <div className="text-[10px] font-mono mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
+        EFFECTS
+      </div>
+      {(Object.keys(EFFECT_LABELS) as Array<keyof EffectToggles>)
+        .filter(key => showAllEffects || key === 'bloom')
+        .map(key => (
+          <label
+            key={key}
+            className="flex items-center gap-2 py-1 px-1 rounded cursor-pointer"
+            style={{ color: effects[key] ? COLORS.textPrimary : COLORS.textMuted }}
+          >
+            <input
+              type="checkbox"
+              checked={effects[key]}
+              onChange={(e) => onEffectChange(key, e.target.checked)}
+              style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
+            />
+            <span className="text-[10px] font-mono">{EFFECT_LABELS[key]}</span>
+          </label>
+        ))}
       <div className="text-[9px] font-mono mt-2 pt-2" style={{ color: COLORS.textMuted, borderTop: `1px solid ${COLORS.holoBorder06}` }}>
-        {showEffects
+        {showAllEffects
           ? 'Lower cap saves power; turning effects off cuts per-frame work.'
-          : 'Lower cap saves power. (Effect toggles only apply on the WebGL renderer.)'}
+          : 'Lower cap saves power; bloom is the heaviest Canvas2D effect.'}
       </div>
     </div>
   )

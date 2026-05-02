@@ -45,6 +45,9 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  /** When false, the Canvas2D bloom post-processing pass is skipped entirely.
+   *  Defaults to true to preserve existing visual appearance. */
+  bloomEnabled?: boolean
   /** Floor for the auto-fit scale. 0 (default) = no minimum. Manual wheel
    *  zoom is unaffected; this only constrains the auto-fit lerp. */
   minZoomLevel?: number
@@ -62,7 +65,7 @@ export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
-  minZoomLevel, pauseWhenOffscreen = true,
+  bloomEnabled = true, minZoomLevel, pauseWhenOffscreen = true,
 }: CanvasProps) {
   const manager = useSimulationManager()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -160,11 +163,15 @@ export function AgentCanvas({
   // ─── Setup ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    bloomRef.current = new BloomRenderer(0.5)
+    if (bloomEnabled) {
+      bloomRef.current = new BloomRenderer(0.5)
+    } else {
+      bloomRef.current = null
+    }
     depthParticlesRef.current = createDepthParticles(dimensions.width, dimensions.height)
     return () => { bloomRef.current = null }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- particles created once, resized by draw loop
-  }, [])
+  }, [bloomEnabled])
 
   useEffect(() => {
     const container = containerRef.current

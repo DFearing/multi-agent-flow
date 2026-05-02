@@ -303,6 +303,7 @@ function SessionCanvasPanelImpl({
               hoveredAgentId={hoveredAgentId}
               showStats={showStats}
               showHexGrid={showHexGrid}
+              bloomEnabled={effects.bloom}
               zoomToFitTrigger={combinedZoomToFitTrigger}
               pauseAutoFit={pauseAutoFit}
               onAgentClick={(id) => onAgentClick(id, sessionId)}
