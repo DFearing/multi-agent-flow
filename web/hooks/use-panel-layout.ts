@@ -12,7 +12,6 @@ export type PanelId =
   | 'file-attention'
   | 'session-transcript'
   | 'timeline'
-  | 'control-bar'
   | 'cost-summary'
   | `canvas-${string}`
 
@@ -75,7 +74,7 @@ const MAX_Z = 9999
  *  the new window starts blank, waiting for the host to `→` panels to it. */
 const ALL_PANEL_IDS: PanelId[] = [
   'top-bar', 'message-feed', 'agent-detail', 'agent-chat',
-  'file-attention', 'session-transcript', 'timeline', 'control-bar',
+  'file-attention', 'session-transcript', 'timeline',
 ]
 
 // ─── URL / session id ──────────────────────────────────────────────────────────

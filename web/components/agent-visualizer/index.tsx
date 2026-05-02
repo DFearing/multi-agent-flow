@@ -10,7 +10,6 @@ import { SessionStatsProvider, useSessionStats } from "./session-stats-provider"
 import { CostSummaryPanel } from "./cost-summary-panel"
 import { SessionNamesProvider } from "@/hooks/use-session-names"
 import { useWorkspaceFilter } from "@/hooks/use-workspace-filter"
-import { ControlBar } from "./control-bar"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
 import { ToolDetailPopup } from "./tool-detail-popup"
@@ -21,11 +20,10 @@ import { AgentChatPanel } from "./chat-panel"
 import { SessionTranscriptPanel } from "./session-transcript-panel"
 import { OpenFileProvider } from "./tool-content-renderer"
 import { stopPropagationHandlers } from "./shared-ui"
-import { TimelineEvent, TIMING, type Agent } from "@/lib/agent-types"
+import { TIMING, type Agent } from "@/lib/agent-types"
 import type { ConversationMessage } from "@/hooks/simulation/types"
 import { COLORS } from "@/lib/colors"
 
-import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
@@ -61,24 +59,18 @@ function AgentVisualizerInner() {
   if (hostNotFound) return <HostNotFoundScreen hostId={hostId} />
 
   const {
-    frameRef,
     agents,
     toolCalls,
-    particles,
-    edges,
     discoveries,
     fileAttention,
     timelineEntries,
     currentTime,
     isPlaying,
-    speed,
-    maxTimeReached,
     conversations,
     play,
     pause,
     restart,
     setSpeed,
-    seekToTime,
     updateAgentPosition,
     saveSnapshot,
     restoreSnapshot,
@@ -154,7 +146,7 @@ function AgentVisualizerInner() {
   const [zoomToFitTrigger, setZoomToFitTrigger] = useState(0)
 
   const [isReviewing, setIsReviewing] = useState(false)
-  const { isMuted, seekingRef, handleToggleMute, playUiClick } = useAudioEffects(agents, toolCalls, isReviewing)
+  const { isMuted, handleToggleMute, playUiClick } = useAudioEffects(agents, toolCalls, isReviewing)
 
   // Auto-play on mount
   useEffect(() => {
@@ -194,39 +186,9 @@ function AgentVisualizerInner() {
     }
   }, [bridge.selectedSessionId, restart, bridge.flushSessionEvents, saveSnapshot, restoreSnapshot, bridge.getSessionEventCount])
 
-  // Timeline events — incremental: only processes new conversation messages
-  const timelineCacheRef = useRef<{
-    counts: Map<string, number>
-    events: TimelineEvent[]
-    idCounter: number
-  }>({ counts: new Map(), events: [], idCounter: 0 })
-
-  const timelineEvents = useMemo((): TimelineEvent[] => {
-    const cache = timelineCacheRef.current
-    let appended = false
-    for (const [agentId, msgs] of conversations) {
-      const prevLen = cache.counts.get(agentId) ?? 0
-      if (msgs.length > prevLen) {
-        for (let i = prevLen; i < msgs.length; i++) {
-          const msg = msgs[i]
-          cache.events.push({
-            id: `event-${cache.idCounter++}`,
-            type: msg.type === 'tool_call' ? 'tool_call' : msg.type === 'tool_result' ? 'tool_result' : 'message',
-            label: msg.content.slice(0, 20),
-            timestamp: msg.timestamp,
-            nodeId: agentId,
-          })
-        }
-        cache.counts.set(agentId, msgs.length)
-        appended = true
-      }
-    }
-    if (appended) cache.events.sort((a, b) => a.timestamp - b.timestamp)
-    return cache.events
-  }, [conversations])
-
-  // Review mode: when in live mode and user pauses to scrub through history
-
+  // Spacebar toggles the global simulation that powers selection / file-attention /
+  // transcript panels. Per-canvas play/pause is handled by each canvas's own
+  // ControlBar at the bottom of the canvas window.
   const handlePlayPause = useCallback(() => {
     if (isPlaying) {
       pause()
@@ -235,26 +197,6 @@ function AgentVisualizerInner() {
       play()
     }
   }, [isPlaying, play, pause])
-
-  const handleEnterReview = useCallback(() => {
-    pause()
-    setIsReviewing(true)
-  }, [pause])
-
-  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const handleResumeLive = useCallback(() => {
-    setIsReviewing(false)
-    seekToTime(maxTimeReached)
-    setZoomToFitTrigger(n => n + 1)
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current)
-    resumeTimerRef.current = setTimeout(() => { resumeTimerRef.current = null; play() }, TIMING.resumeLiveDelayMs)
-  }, [seekToTime, maxTimeReached, play])
-  useEffect(() => () => { if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current) }, [])
-
-  const handleRestart = useCallback(() => {
-    setIsReviewing(false)
-    restart(true)
-  }, [restart])
 
   // Keyboard shortcuts
   const keyboardActions = useMemo(() => ({
@@ -512,33 +454,6 @@ function AgentVisualizerInner() {
           onClose={() => selection.setContextMenu(null)}
         />
       )}
-
-      {/* Floating control strip */}
-      <ControlBar
-        isPlaying={isPlaying}
-        speed={speed}
-        currentTime={currentTime}
-        totalDuration={bridge.useMockData
-          ? (isReviewing ? Math.max(maxTimeReached, currentTime) : MOCK_DURATION)
-          : Math.max(maxTimeReached, currentTime)
-        }
-        onPlayPause={handlePlayPause}
-        onRestart={handleRestart}
-        onSpeedChange={setSpeed}
-        onSeek={(time) => {
-          seekingRef.current = true
-          pause()
-          seekToTime(time)
-          setZoomToFitTrigger(n => n + 1)
-          if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current)
-          resumeTimerRef.current = setTimeout(() => { resumeTimerRef.current = null; seekingRef.current = false }, TIMING.seekCompleteDelayMs)
-        }}
-        timelineEvents={timelineEvents}
-        isReviewing={isReviewing}
-        eventCount={timelineEvents.length}
-        onEnterReview={handleEnterReview}
-        onResumeLive={handleResumeLive}
-      />
 
       {/* File attention panel (slide-in from right) */}
       <FileAttentionPanel

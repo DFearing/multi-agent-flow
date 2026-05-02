@@ -1,14 +1,15 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAgentSimulation } from '@/hooks/use-agent-simulation'
 import { usePanelLayout } from '@/hooks/use-panel-layout'
 import { useSessionNames } from '@/hooks/use-session-names'
 import { colorForSession } from '@/lib/colors'
 import { AgentCanvas } from './canvas'
+import { ControlBar } from './control-bar'
 import { FloatingPanel } from './floating-panel'
 import { useSessionStats, type SessionStats } from './session-stats-provider'
-import type { SimulationEvent } from '@/lib/agent-types'
+import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
 
 /** Stable empty-events sentinel — keeps the externalEvents prop reference
  *  identical across idle renders so useAgentSimulation's animate callback
@@ -144,6 +145,85 @@ export function SessionCanvasPanel({
   const { getName, setName } = useSessionNames()
   const displayTitle = getName(sessionId) ?? sessionLabel
 
+  // ── Per-session control bar state ──────────────────────────────────────────
+  // Each canvas drives its own play/pause/seek/review independently of the
+  // others. Review mode pauses live updates so the user can scrub history.
+  const [isReviewing, setIsReviewing] = useState(false)
+  const [zoomToFitTick, setZoomToFitTick] = useState(0)
+
+  // Build timeline event dots incrementally from this session's conversations.
+  // Mirrors the global computation in index.tsx but scoped to one session.
+  const timelineCacheRef = useRef<{ counts: Map<string, number>; events: TimelineEvent[]; idCounter: number }>({
+    counts: new Map(),
+    events: [],
+    idCounter: 0,
+  })
+  const timelineEvents = useMemo((): TimelineEvent[] => {
+    const cache = timelineCacheRef.current
+    let appended = false
+    for (const [agentId, msgs] of sim.conversations) {
+      const prevLen = cache.counts.get(agentId) ?? 0
+      if (msgs.length > prevLen) {
+        for (let i = prevLen; i < msgs.length; i++) {
+          const msg = msgs[i]
+          cache.events.push({
+            id: `event-${cache.idCounter++}`,
+            type: msg.type === 'tool_call' ? 'tool_call' : msg.type === 'tool_result' ? 'tool_result' : 'message',
+            label: msg.content.slice(0, 20),
+            timestamp: msg.timestamp,
+            nodeId: agentId,
+          })
+        }
+        cache.counts.set(agentId, msgs.length)
+        appended = true
+      }
+    }
+    if (appended) cache.events.sort((a, b) => a.timestamp - b.timestamp)
+    return cache.events
+  }, [sim.conversations])
+
+  const handlePlayPause = useCallback(() => {
+    if (sim.isPlaying) {
+      sim.pause()
+      setIsReviewing(true)
+    } else {
+      sim.play()
+    }
+  }, [sim.isPlaying, sim.play, sim.pause])
+
+  const handleEnterReview = useCallback(() => {
+    sim.pause()
+    setIsReviewing(true)
+  }, [sim.pause])
+
+  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleResumeLive = useCallback(() => {
+    setIsReviewing(false)
+    sim.seekToTime(sim.maxTimeReached)
+    setZoomToFitTick(n => n + 1)
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current)
+    resumeTimerRef.current = setTimeout(
+      () => { resumeTimerRef.current = null; sim.play() },
+      TIMING.resumeLiveDelayMs,
+    )
+  }, [sim.seekToTime, sim.maxTimeReached, sim.play])
+  useEffect(() => () => { if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current) }, [])
+
+  const handleRestart = useCallback(() => {
+    setIsReviewing(false)
+    sim.restart(true)
+  }, [sim.restart])
+
+  const handleSeek = useCallback((time: number) => {
+    sim.pause()
+    sim.seekToTime(time)
+    setZoomToFitTick(n => n + 1)
+  }, [sim.pause, sim.seekToTime])
+
+  // Combine the parent's zoom-to-fit trigger with this canvas's own (fired by
+  // seek/resume) so both routes invalidate the canvas's auto-fit cache.
+  const combinedZoomToFitTrigger = zoomToFitTrigger + zoomToFitTick
+
   // Fresh attach (`?host=<id>` with no `?session=`) starts blank: only show
   // canvas tiles that the host has explicitly sent over via `→`.
   if (bootedAsAttached && !explicitlyVisible) return null
@@ -160,25 +240,42 @@ export function SessionCanvasPanel({
       onTitleEdit={(next) => setName(sessionId, next)}
       noContentZoom
     >
-      <div style={{ width: '100%', height: '100%', position: 'relative', background: sessionColor.tint }}>
-        <AgentCanvas
-          simulationRef={sim.frameRef}
-          sessionId={sessionId}
-          selectedAgentId={selectedAgentId}
-          hoveredAgentId={hoveredAgentId}
-          showStats={showStats}
-          showHexGrid={showHexGrid}
-          zoomToFitTrigger={zoomToFitTrigger}
-          pauseAutoFit={pauseAutoFit}
-          onAgentClick={(id) => onAgentClick(id, sessionId)}
-          onAgentHover={onAgentHover}
-          onAgentDrag={onAgentDrag}
-          onContextMenu={onContextMenu}
-          onToolCallClick={onToolCallClick}
-          selectedToolCallId={selectedToolCallId}
-          onDiscoveryClick={onDiscoveryClick}
-          selectedDiscoveryId={selectedDiscoveryId}
-          showCostOverlay={showCostOverlay}
+      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: sessionColor.tint }}>
+        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+          <AgentCanvas
+            simulationRef={sim.frameRef}
+            sessionId={sessionId}
+            selectedAgentId={selectedAgentId}
+            hoveredAgentId={hoveredAgentId}
+            showStats={showStats}
+            showHexGrid={showHexGrid}
+            zoomToFitTrigger={combinedZoomToFitTrigger}
+            pauseAutoFit={pauseAutoFit}
+            onAgentClick={(id) => onAgentClick(id, sessionId)}
+            onAgentHover={onAgentHover}
+            onAgentDrag={onAgentDrag}
+            onContextMenu={onContextMenu}
+            onToolCallClick={onToolCallClick}
+            selectedToolCallId={selectedToolCallId}
+            onDiscoveryClick={onDiscoveryClick}
+            selectedDiscoveryId={selectedDiscoveryId}
+            showCostOverlay={showCostOverlay}
+          />
+        </div>
+        <ControlBar
+          isPlaying={sim.isPlaying}
+          speed={sim.speed}
+          currentTime={sim.currentTime}
+          totalDuration={Math.max(sim.maxTimeReached, sim.currentTime)}
+          onPlayPause={handlePlayPause}
+          onRestart={handleRestart}
+          onSpeedChange={sim.setSpeed}
+          onSeek={handleSeek}
+          timelineEvents={timelineEvents}
+          isReviewing={isReviewing}
+          eventCount={timelineEvents.length}
+          onEnterReview={handleEnterReview}
+          onResumeLive={handleResumeLive}
         />
       </div>
     </FloatingPanel>
