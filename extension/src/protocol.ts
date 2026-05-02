@@ -34,6 +34,10 @@ export interface SessionInfo {
   status: 'active' | 'completed'
   startTime: number
   lastActivityTime: number
+  /** Working directory the session was launched in. Surfaced so the client
+   *  can group/filter sessions by project, e.g. an "only show these
+   *  workspaces" allowlist that keeps unrelated repos out of the canvas. */
+  cwd?: string
 }
 
 // ─── Extension → Webview Messages ────────────────────────────────────────────
@@ -188,6 +192,9 @@ export interface WatchedSession {
   subagentsDir: string | null
   label: string
   labelSet: boolean
+  /** Captured from the first transcript line that includes a `cwd` field.
+   *  Used by the client to group sessions by workspace. */
+  cwd: string | null
   model: string | null
   permissionTimer: NodeJS.Timeout | null
   permissionEmitted: boolean

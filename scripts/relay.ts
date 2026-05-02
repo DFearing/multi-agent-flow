@@ -79,6 +79,71 @@ function broadcast(data: string) {
 
 const eventBuffer = new Map<string, AgentEvent[]>()
 
+/** Per-agent lifecycle events preserved outside the 5000-event buffer cap so a
+ *  late-connecting client can still reconstruct the agent window even when the
+ *  original spawn has aged out. The buffer evicts oldest-first and overflows on
+ *  long sessions; these snapshots survive so every known agent has at minimum
+ *  its spawn (plus latest model + context + completion) replayed on reconnect. */
+interface AgentSnapshot {
+  spawn: AgentEvent
+  model?: AgentEvent
+  context?: AgentEvent
+  complete?: AgentEvent
+}
+const agentSnapshots = new Map<string, Map<string, AgentSnapshot>>()
+
+function getAgentSnapshots(sessionId: string): Map<string, AgentSnapshot> {
+  let m = agentSnapshots.get(sessionId)
+  if (!m) { m = new Map(); agentSnapshots.set(sessionId, m) }
+  return m
+}
+
+function updateAgentSnapshot(event: AgentEvent): void {
+  if (!event.sessionId) return
+  const payload = event.payload as Record<string, unknown> | undefined
+  if (event.type === 'agent_spawn') {
+    const name = typeof payload?.name === 'string' ? payload.name : null
+    if (!name) return
+    const bySession = getAgentSnapshots(event.sessionId)
+    const existing = bySession.get(name)
+    // Resume after inactivity re-emits agent_spawn; preserve the original spawn
+    // (and its time=0 spawnTime) but clear completion so the agent shows active.
+    if (existing) {
+      bySession.set(name, { ...existing, complete: undefined })
+    } else {
+      bySession.set(name, { spawn: event })
+    }
+  } else if (event.type === 'agent_complete') {
+    const name = typeof payload?.name === 'string' ? payload.name : null
+    if (!name) return
+    const snap = agentSnapshots.get(event.sessionId)?.get(name)
+    if (snap) snap.complete = event
+  } else if (event.type === 'model_detected') {
+    const agent = typeof payload?.agent === 'string' ? payload.agent : null
+    if (!agent) return
+    const snap = agentSnapshots.get(event.sessionId)?.get(agent)
+    if (snap) snap.model = event
+  } else if (event.type === 'context_update') {
+    const agent = typeof payload?.agent === 'string' ? payload.agent : null
+    if (!agent) return
+    const snap = agentSnapshots.get(event.sessionId)?.get(agent)
+    if (snap) snap.context = event
+  }
+}
+
+function snapshotEventsForSession(sessionId: string): AgentEvent[] {
+  const bySession = agentSnapshots.get(sessionId)
+  if (!bySession) return []
+  const out: AgentEvent[] = []
+  for (const snap of bySession.values()) {
+    out.push(snap.spawn)
+    if (snap.model) out.push(snap.model)
+    if (snap.context) out.push(snap.context)
+    if (snap.complete) out.push(snap.complete)
+  }
+  return out
+}
+
 function broadcastEvent(event: AgentEvent) {
   sessionEventCount++
   if (event.type === 'model_detected') {
@@ -95,21 +160,26 @@ function broadcastEvent(event: AgentEvent) {
       buf = buf.slice(buf.length - MAX_EVENT_BUFFER)
     }
     eventBuffer.set(event.sessionId, buf)
+    updateAgentSnapshot(event)
   }
 
   broadcast(JSON.stringify({ type: 'agent-event', event }))
 }
 
 function broadcastSessionLifecycle(type: 'started' | 'ended' | 'updated', sessionId: string, label: string) {
+  // Always send the session's current cwd if known — it can be captured after
+  // 'started' fires (transcript parser populates it from the first JSONL
+  // entry), so 'updated' is the canonical place for late-arriving cwd.
+  const cwd = sessions.get(sessionId)?.cwd ?? undefined
   if (type === 'started') {
     broadcast(JSON.stringify({
       type: 'session-started',
-      session: { id: sessionId, label, status: 'active', startTime: Date.now(), lastActivityTime: Date.now() } as SessionInfo,
+      session: { id: sessionId, label, status: 'active', startTime: Date.now(), lastActivityTime: Date.now(), cwd } as SessionInfo,
     }))
   } else if (type === 'ended') {
     broadcast(JSON.stringify({ type: 'session-ended', sessionId }))
   } else if (type === 'updated') {
-    broadcast(JSON.stringify({ type: 'session-updated', sessionId, label }))
+    broadcast(JSON.stringify({ type: 'session-updated', sessionId, label, cwd }))
   }
 }
 
@@ -206,7 +276,7 @@ function watchSession(sessionId: string, filePath: string) {
     spawnedSubagents: new Set(),
     inlineProgressAgents: new Set(),
     subagentsDirWatcher: null, subagentsDir: null,
-    label: defaultLabel, labelSet: false,
+    label: defaultLabel, labelSet: false, cwd: null,
     model: null,
     permissionTimer: null, permissionEmitted: false,
     contextBreakdown: { systemPrompt: SYSTEM_PROMPT_BASE_TOKENS, userMessages: 0, toolResults: 0, reasoning: 0, subagentResults: 0 },
@@ -487,6 +557,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
           id: session.sessionId, label: session.label,
           status: session.sessionCompleted ? 'completed' : 'active',
           startTime: session.sessionStartTime, lastActivityTime: session.lastActivityTime,
+          ...(session.cwd ? { cwd: session.cwd } : {}),
         })
       }
       if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
@@ -494,17 +565,31 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }
 
-      // Replay buffered events for the most recent active session
+      // Replay buffered events for every known session — each event carries
+      // its own sessionId so the client routes them into the right per-session
+      // buffer. Send most-recently-active first so the auto-selected session
+      // hydrates before the others. Necessary for multi-canvas UIs that show
+      // every session at once; the old "most recent only" behavior left other
+      // canvases blank because their agent_spawn was in the past.
       const sorted = [...sessionList].sort((a, b) => {
         const aActive = a.status === 'active' ? 1 : 0
         const bActive = b.status === 'active' ? 1 : 0
         if (aActive !== bActive) return bActive - aActive
         return b.lastActivityTime - a.lastActivityTime
       })
-      if (sorted.length > 0) {
-        const buffered = eventBuffer.get(sorted[0].id)
-        if (buffered) {
+      for (const s of sorted) {
+        const buffered = eventBuffer.get(s.id)
+        if (buffered && buffered.length > 0) {
           sendSSE(res, { type: 'agent-event-batch', events: buffered })
+        }
+        // Replay preserved per-agent lifecycle events last so any agent whose
+        // spawn aged out of the 5000-cap buffer still materializes. Handlers
+        // are idempotent (handleAgentSpawn reactivates if existing) and the
+        // snapshot is always at least as fresh as the buffer, so a duplicate
+        // context_update here just confirms the latest tokens reading.
+        const snapshot = snapshotEventsForSession(s.id)
+        if (snapshot.length > 0) {
+          sendSSE(res, { type: 'agent-event-batch', events: snapshot })
         }
       }
     },

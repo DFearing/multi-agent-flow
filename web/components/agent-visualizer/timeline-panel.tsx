@@ -1,9 +1,9 @@
 'use client'
 
 import { useRef, useEffect, useMemo } from 'react'
-import { TimelineEntry, Z } from '@/lib/agent-types'
+import { TimelineEntry } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
-import { PanelHeader, SlidingPanel } from './shared-ui'
+import { FloatingPanel } from './floating-panel'
 
 interface TimelinePanelProps {
   visible: boolean
@@ -182,24 +182,34 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw on every prop change (component only re-renders on data/time updates)
   }, [visible, sortedEntries, currentTime, canvasHeight])
 
+  // Auto-size to content (matches upstream): canvas grows with entries, capped at 300.
+  const defaultRect = useMemo(() => {
+    const CHROME = 22, LEGEND = 30, BUFFER = 4
+    const canvasArea = Math.min(canvasHeight, 300)
+    const h = CHROME + canvasArea + LEGEND + BUFFER
+    if (typeof window === 'undefined') return { x: 100, y: 500, w: 700, h }
+    return {
+      x: Math.max(16, (window.innerWidth - Math.min(700, window.innerWidth - 32)) / 2),
+      y: window.innerHeight - 72 - h,
+      w: Math.min(700, window.innerWidth - 32),
+      h,
+    }
+  }, [canvasHeight])
+
   if (!visible) return null
 
   return (
-    <SlidingPanel
+    <FloatingPanel
+      id="timeline"
+      defaultRect={defaultRect}
+      minW={300}
+      minH={100}
       visible={visible}
-      position={{ bottom: 72, left: 16, right: 16 }}
-      axis="Y"
-      zIndex={Z.sidePanel}
-      className="mx-auto"
-      style={{ maxWidth: 700 }}
+      title="EXECUTION TIMELINE"
+      onClose={onClose}
+      showHandle={false}
     >
-      <div className="glass-card relative">
-        <PanelHeader onClose={onClose}>
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
-            EXECUTION TIMELINE
-          </span>
-        </PanelHeader>
-
+      <div>
         <div className="overflow-auto" style={{ maxHeight: 300 }}>
           <canvas ref={canvasRef} style={{ display: 'block' }} />
         </div>
@@ -217,6 +227,6 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
           </div>
         </div>
       </div>
-    </SlidingPanel>
+    </FloatingPanel>
   )
 }

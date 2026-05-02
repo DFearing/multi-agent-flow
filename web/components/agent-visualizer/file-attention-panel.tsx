@@ -1,9 +1,11 @@
 'use client'
 
-import { FileAttention, Z } from '@/lib/agent-types'
+import { memo, useMemo, useState } from 'react'
+import { FileAttention } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { formatTokens, truncatePath } from '@/lib/utils'
-import { PanelHeader, ProgressBar, SlidingPanel } from './shared-ui'
+import { ProgressBar } from './shared-ui'
+import { FloatingPanel } from './floating-panel'
 
 interface FileAttentionPanelProps {
   visible: boolean
@@ -12,30 +14,36 @@ interface FileAttentionPanelProps {
   onOpenFile?: (filePath: string) => void
 }
 
-export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile }: FileAttentionPanelProps) {
-  if (!visible) return null
+export const FileAttentionPanel = memo(function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile }: FileAttentionPanelProps) {
+  const [defaultRect] = useState(() => {
+    if (typeof window === 'undefined') return { x: 800, y: 72, w: 260, h: 588 }
+    return { x: window.innerWidth - 260 - 12, y: 72, w: 260, h: window.innerHeight - 92 }
+  })
 
-  const files = Array.from(fileAttention.values())
-    .sort((a, b) => b.totalTokens - a.totalTokens)
+  const files = useMemo(
+    () => Array.from(fileAttention.values()).sort((a, b) => b.totalTokens - a.totalTokens),
+    [fileAttention],
+  )
 
-  const maxTokens = Math.max(...files.map(f => f.totalTokens), 1)
+  const maxTokens = useMemo(
+    () => Math.max(...files.map(f => f.totalTokens), 1),
+    [files],
+  )
 
   return (
-    <SlidingPanel
+    <FloatingPanel
+      id="file-attention"
+      defaultRect={defaultRect}
+      minW={200}
+      minH={160}
       visible={visible}
-      position={{ top: 48, right: 12 }}
-      zIndex={Z.sidePanel}
-      width={260}
+      title="FILE ATTENTION"
+      onClose={onClose}
+      showHandle={false}
     >
-      <div className="glass-card relative">
-        <PanelHeader onClose={onClose}>
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
-            FILE ATTENTION
-          </span>
-        </PanelHeader>
-
+      <div className="flex flex-col h-full p-3 pt-1">
         {/* File list */}
-        <div className="space-y-1 max-h-[300px] overflow-y-auto">
+        <div className="space-y-1 flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: `${COLORS.scrollbarThumb} transparent` }}>
           {files.length === 0 && (
             <div className="text-[9px] font-mono py-2 text-center" style={{ color: COLORS.textMuted }}>
               No files accessed yet
@@ -102,7 +110,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
 
         {/* Summary */}
         {files.length > 0 && (
-          <div className="mt-2 pt-2 flex justify-between text-[9px] font-mono" style={{
+          <div className="mt-2 pt-2 flex justify-between text-[9px] font-mono flex-shrink-0" style={{
             borderTop: `1px solid ${COLORS.holoBorder08}`,
             color: COLORS.textMuted,
           }}>
@@ -111,6 +119,6 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
           </div>
         )}
       </div>
-    </SlidingPanel>
+    </FloatingPanel>
   )
-}
+})

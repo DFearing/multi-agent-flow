@@ -43,8 +43,8 @@ export const COLORS = {
   // UI Chrome
   nodeInterior: 'rgba(10, 15, 40, 0.5)',
   textPrimary: '#aaeeff',
-  textDim: '#66ccff90',
-  textMuted: '#66ccff50',
+  textDim: '#66ccffcc',
+  textMuted: '#66ccff90',
 
   // Glass card
   glassBg: 'rgba(10, 15, 30, 0.7)',
@@ -67,7 +67,8 @@ export const COLORS = {
   // Toggle button states
   toggleActive: 'rgba(100, 200, 255, 0.15)',
   toggleInactive: 'rgba(100, 200, 255, 0.05)',
-  toggleBorder: 'rgba(100, 200, 255, 0.1)',
+  toggleHover: 'rgba(100, 200, 255, 0.18)',
+  toggleBorder: 'rgba(100, 200, 255, 0.18)',
 
   // Live indicator
   liveDot: '#ff4444',
@@ -262,4 +263,44 @@ export function contextSegments(bd: ContextBreakdown) {
     { value: bd.reasoning, color: COLORS.contextReasoning },
     { value: bd.subagentResults, color: COLORS.contextSubagent },
   ]
+}
+
+// ─── Per-session color ──────────────────────────────────────────────────────
+
+/** Six well-spaced hues that read distinctly against the holo-blue chrome
+ *  without competing for attention with agent state colors (which already
+ *  use the cyan/amber/green/red corners of the wheel). */
+const SESSION_HUES = [205, 280, 145, 25, 320, 60] as const
+
+/** djb2-style string hash → uint32. Keeps the result deterministic per
+ *  sessionId so reloading produces the same color. */
+function hashString(s: string): number {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return h >>> 0
+}
+
+export interface SessionColor {
+  /** Vivid HSL string for the title-bar accent stripe and message dot. */
+  accent: string
+  /** Very faint wash for canvas drawing-area background. */
+  tint: string
+  /** Subtle border tint for transcript message rows. */
+  border: string
+}
+
+const sessionColorCache = new Map<string, SessionColor>()
+
+export function colorForSession(sessionId: string): SessionColor {
+  const cached = sessionColorCache.get(sessionId)
+  if (cached) return cached
+
+  const hue = SESSION_HUES[hashString(sessionId) % SESSION_HUES.length]
+  const color: SessionColor = {
+    accent: `hsl(${hue} 75% 62%)`,
+    tint: `hsla(${hue}, 60%, 50%, 0.04)`,
+    border: `hsla(${hue}, 70%, 60%, 0.45)`,
+  }
+  sessionColorCache.set(sessionId, color)
+  return color
 }

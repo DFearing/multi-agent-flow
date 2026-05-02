@@ -124,6 +124,23 @@
   }
 }
 
+/* LIVE-mode pulsing dot. Pure CSS so each per-canvas control bar costs zero
+ * JS / zero React re-renders for the cosmetic blink. Values mirror the prior
+ * setInterval-driven inline styles in control-bar.tsx. */
+@keyframes live-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 8px #ff4444, 0 0 16px rgba(255, 68, 68, 0.3);
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 4px rgba(255, 68, 68, 0.5);
+  }
+}
+.live-pulse-dot {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
 /* Glass card effect */
 .glass-card {
   background: rgba(10, 15, 30, 0.7);

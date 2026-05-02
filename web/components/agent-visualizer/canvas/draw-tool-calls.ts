@@ -3,12 +3,14 @@ import { COLORS, withAlpha } from '@/lib/colors'
 import { TOOL_MAX_CARD_W, TOOL_DRAW } from '@/lib/canvas-constants'
 import { truncateText } from './draw-misc'
 import { measureTextCached } from './render-cache'
+import { type ViewBounds, isRectVisible } from './viewport'
 
 export function drawToolCalls(
   ctx: CanvasRenderingContext2D,
   toolCalls: Map<string, ToolCallNode>,
   time: number,
   selectedToolCallId?: string | null,
+  bounds?: ViewBounds,
 ) {
   for (const [id, tool] of toolCalls) {
     const isRunning = tool.state === 'running'
@@ -26,6 +28,13 @@ export function drawToolCalls(
     const cardH = (!isRunning && (tool.tokenCost || isError)) ? TOOL_DRAW.expandedHeight : TOOL_DRAW.collapsedHeight
     const cardX = tool.x - cardW / 2
     const cardY = tool.y - cardH / 2
+
+    // Cull tool cards entirely outside the viewport. Margin covers the
+    // running spinner ring + error shadow halo.
+    if (bounds && !isRectVisible(cardX - 16, cardY - 16, cardW + 32, cardH + 32, bounds)) {
+      ctx.restore()
+      continue
+    }
 
     const isSelected = id === selectedToolCallId
 
@@ -73,7 +82,11 @@ export function drawToolCalls(
       ctx.restore()
     }
 
-    const truncatedLabel = truncateText(ctx, toolLabel, cardW - 8)
+    // Reuse `label` from the card-sizing pass above. By construction the card
+    // is at least as wide as label needs (cardW = min(measured + 12, max), so
+    // cardW - 8 ≥ measured), which means `label` already fits within the
+    // narrower bound that we used to re-truncate to.
+    const truncatedLabel = label
 
     ctx.font = `${TOOL_DRAW.fontSize}px monospace`
     ctx.textAlign = 'center'

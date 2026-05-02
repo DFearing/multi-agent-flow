@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 
@@ -33,6 +33,8 @@ interface BridgeHookResult {
   sessionsWithActivity: Set<string>
   /** Remove a session from the list */
   removeSession: (sessionId: string) => void
+  /** Read the full event log for a specific session (used by per-session canvases). */
+  getSessionEventLog: (sessionId: string) => readonly SimulationEvent[]
 }
 
 /**
@@ -43,6 +45,13 @@ interface BridgeHookResult {
  * Supports multi-session: events are buffered per-session so switching
  * sessions replays the correct event history.
  */
+/** Drop the relay's initial backlog so the canvas doesn't get hit with a
+ *  flood of historical events on page load. Each incoming event resets the
+ *  idle timer; once IDLE_FLUSH_MS passes with no new event, we flip to live
+ *  mode. MAX_WARMUP_MS is a hard cap in case the feed never quiets down. */
+const IDLE_FLUSH_MS = 300
+const MAX_WARMUP_MS = 3000
+
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
@@ -52,6 +61,22 @@ export function useVSCodeBridge(): BridgeHookResult {
   const [disable1MContext, setDisable1MContext] = useState(false)
   const pendingEventsRef = useRef<SimulationEvent[]>([])
   const [, setEventVersion] = useState(0) // trigger re-render on new events
+
+  // Initial-backlog drop state — see top-of-file comment.
+  const droppingRef = useRef(true)
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hardCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const exitDropRef = useRef(() => {})
+  exitDropRef.current = () => {
+    if (!droppingRef.current) return
+    droppingRef.current = false
+    if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null }
+    if (hardCapTimerRef.current) { clearTimeout(hardCapTimerRef.current); hardCapTimerRef.current = null }
+  }
+
+  // rAF-coalesced bump: at most one re-render per animation frame regardless of event burst rate
+  const rafPendingRef = useRef(false)
+  const rafIdRef = useRef<number | null>(null)
 
   // Session state
   const [sessions, setSessions] = useState<SessionInfo[]>([])
@@ -98,6 +123,17 @@ export function useVSCodeBridge(): BridgeHookResult {
     }
   }, [])
 
+  // Hard-cap timer — forces live mode at MAX_WARMUP_MS regardless of how
+  // the idle timer is faring. Protects against feeds that never quiet down.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    hardCapTimerRef.current = setTimeout(() => exitDropRef.current(), MAX_WARMUP_MS)
+    return () => {
+      if (hardCapTimerRef.current) { clearTimeout(hardCapTimerRef.current); hardCapTimerRef.current = null }
+      if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null }
+    }
+  }, [])
+
   useEffect(() => {
     const bridge = vscodeBridge
     if (!bridge) { return }
@@ -112,6 +148,15 @@ export function useVSCodeBridge(): BridgeHookResult {
     // selectedSessionIdRef is updated synchronously (not via React state) so it's
     // always current even before React re-renders.
     const unsubEvent = bridge.onEvent((event: AgentEvent) => {
+      // Drop the relay's initial backlog. Each event resets the idle timer;
+      // once IDLE_FLUSH_MS passes quietly, the backlog has finished arriving
+      // and we exit drop mode for normal live handling.
+      if (droppingRef.current) {
+        if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = setTimeout(() => exitDropRef.current(), IDLE_FLUSH_MS)
+        return
+      }
+
       const simEvent: SimulationEvent = {
         time: event.time,
         type: event.type as SimulationEvent['type'],
@@ -132,14 +177,23 @@ export function useVSCodeBridge(): BridgeHookResult {
       const selected = selectedSessionIdRef.current
       if (selected && event.sessionId === selected && !sessionSwitchPendingRef.current) {
         pendingEventsRef.current.push(simEvent)
-        setEventVersion(v => v + 1)
       } else if (event.sessionId && event.sessionId !== selected) {
-        // Track background activity for unselected sessions
         setSessionsWithActivity(prev => {
           if (prev.has(event.sessionId!)) return prev
           const next = new Set(prev)
           next.add(event.sessionId!)
           return next
+        })
+      }
+
+      // Coalesce re-renders: schedule at most one bump per animation frame
+      // so burst events (dozens/sec) only trigger a single React re-render per frame.
+      if (!rafPendingRef.current) {
+        rafPendingRef.current = true
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafPendingRef.current = false
+          rafIdRef.current = null
+          setEventVersion(v => v + 1)
         })
       }
 
@@ -220,9 +274,11 @@ export function useVSCodeBridge(): BridgeHookResult {
         selectedSessionIdRef.current = session.id
         setSelectedSessionId(session.id)
       } else if (type === 'updated') {
-        const { sessionId, label } = data as { sessionId: string; label: string }
+        const { sessionId, label, cwd } = data as { sessionId: string; label: string; cwd?: string }
         setSessions(prev => prev.map(s =>
-          s.id === sessionId ? { ...s, label } : s
+          s.id === sessionId
+            ? { ...s, label, ...(cwd !== undefined ? { cwd } : {}) }
+            : s
         ))
       } else if (type === 'ended') {
         const sessionId = data as string
@@ -238,6 +294,12 @@ export function useVSCodeBridge(): BridgeHookResult {
       unsubStatus()
       unsubConfig()
       unsubSession()
+      // Cancel any pending rAF bump to avoid setState on unmounted component
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+        rafPendingRef.current = false
+      }
     }
   }, [])
 
@@ -299,21 +361,40 @@ export function useVSCodeBridge(): BridgeHookResult {
     vscodeBridge?.openFile(filePath, line)
   }, [])
 
-  return {
-    isVSCode,
-    connectionStatus,
-    pendingEvents: pendingEventsRef.current,
-    consumeEvents,
-    useMockData,
-    disable1MContext,
-    bridgeOpenFile,
-    sessions,
-    selectedSessionId,
-    selectedSessionIdRef,
-    selectSession,
-    flushSessionEvents,
-    getSessionEventCount,
-    sessionsWithActivity,
-    removeSession,
-  }
+  // Stable: reads through the ref so identity never changes across renders.
+  const getSessionEventLog = useCallback(
+    (sessionId: string) => sessionEventsRef.current.get(sessionId) ?? [],
+    [],
+  )
+
+  // Memoize the return so its identity only churns when one of the underlying
+  // members actually changes. Without this, every render of the consumer
+  // (`AgentVisualizerInner`) would see a fresh `bridge` object and any effect
+  // or memo depending on `bridge` would re-run despite no real change.
+  return useMemo(
+    () => ({
+      isVSCode,
+      connectionStatus,
+      pendingEvents: pendingEventsRef.current,
+      consumeEvents,
+      useMockData,
+      disable1MContext,
+      bridgeOpenFile,
+      sessions,
+      selectedSessionId,
+      selectedSessionIdRef,
+      selectSession,
+      flushSessionEvents,
+      getSessionEventCount,
+      sessionsWithActivity,
+      removeSession,
+      getSessionEventLog,
+    }),
+    [
+      isVSCode, connectionStatus, consumeEvents, useMockData, disable1MContext,
+      bridgeOpenFile, sessions, selectedSessionId, selectedSessionIdRef,
+      selectSession, flushSessionEvents, getSessionEventCount, sessionsWithActivity,
+      removeSession, getSessionEventLog,
+    ],
+  )
 }

@@ -1,10 +1,11 @@
 'use client'
 
-import { CARD, Z, type AgentState } from '@/lib/agent-types'
+import { memo } from 'react'
+import { type AgentState } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
 import { formatTokens } from '@/lib/utils'
-import { GlassCard } from './glass-card'
-import { PanelHeader, ProgressBar } from './shared-ui'
+import { ProgressBar } from './shared-ui'
+import { FloatingPanel } from './floating-panel'
 
 interface AgentDetailCardProps {
   agent: {
@@ -20,72 +21,85 @@ interface AgentDetailCardProps {
   onClose: () => void
 }
 
-export function AgentDetailCard({
+function agentDetailCardEqual(
+  prev: AgentDetailCardProps,
+  next: AgentDetailCardProps,
+): boolean {
+  if (prev.onClose !== next.onClose) return false
+  const a = prev.agent
+  const b = next.agent
+  return (
+    a.name === b.name &&
+    a.state === b.state &&
+    a.tokensUsed === b.tokensUsed &&
+    a.tokensMax === b.tokensMax &&
+    a.toolCalls === b.toolCalls &&
+    a.timeAlive === b.timeAlive &&
+    a.currentTool === b.currentTool
+  )
+}
+
+export const AgentDetailCard = memo(function AgentDetailCard({
   agent,
   onClose,
 }: AgentDetailCardProps) {
   const contextPercent = Math.round((agent.tokensUsed / agent.tokensMax) * 100)
   const stateColor = getStateColor(agent.state)
 
-  // Fixed position: middle-left of the screen (below message feed panel)
-  const left = CARD.margin
-  const top = typeof window !== 'undefined' ? Math.max(100, (window.innerHeight - CARD.detail.height) / 2) : 300
-
   return (
-    <GlassCard
-      visible={true}
-      className="agent-detail-card"
-      style={{
-        position: 'absolute',
-        left,
-        top,
-        width: CARD.detail.width,
-        zIndex: Z.detailCard,
-      }}
+    <FloatingPanel
+      id="agent-detail"
+      defaultRect={{ x: 12, y: 488, w: 240, h: 224 }}
+      minW={200}
+      minH={140}
+      title={agent.name}
+      onClose={onClose}
+      showHandle={false}
     >
-      <PanelHeader onClose={onClose} className="mb-3">
-        <div
-          className="w-2 h-2 rounded-full"
-          style={{ background: stateColor, boxShadow: `0 0 8px ${stateColor}` }}
-        />
-        <span className="text-xs font-mono" style={{ color: COLORS.textPrimary }}>
-          {agent.name}
-        </span>
-      </PanelHeader>
-
-      {/* Context bar */}
-      <div className="mb-3">
-        <div className="flex justify-between mb-1">
-          <span className="text-[10px]" style={{ color: COLORS.textMuted }}>Context</span>
-          <span className="text-[10px] font-mono" style={{ color: COLORS.textDim }}>
-            {formatTokens(agent.tokensUsed)} / {formatTokens(agent.tokensMax)} ({contextPercent}%)
+      <div className="p-3">
+        {/* State indicator */}
+        <div className="flex items-center gap-2 mb-3">
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{ background: stateColor, boxShadow: `0 0 8px ${stateColor}` }}
+          />
+          <span className="text-[10px] font-mono capitalize" style={{ color: stateColor }}>
+            {agent.state}
           </span>
         </div>
-        <ProgressBar percent={contextPercent} color={stateColor} />
-      </div>
 
-      {/* Stats row */}
-      <div className="flex gap-3 mb-3 text-[10px] font-mono" style={{ color: COLORS.textDim }}>
-        <span>{agent.toolCalls} tools</span>
-        <span>{agent.timeAlive.toFixed(1)}s alive</span>
-        <span className="capitalize" style={{ color: stateColor }}>{agent.state}</span>
-      </div>
-
-      {/* Current tool */}
-      {agent.currentTool && (
-        <div
-          className="mb-3 px-2 py-1.5 rounded text-[10px] font-mono flex items-center gap-2"
-          style={{
-            background: COLORS.toolIndicatorBg,
-            border: `1px solid ${COLORS.toolIndicatorBorder}`,
-            color: COLORS.toolIndicatorText,
-          }}
-        >
-          <span className="animate-spin inline-block">⚙</span>
-          {agent.currentTool}
+        {/* Context bar */}
+        <div className="mb-3">
+          <div className="flex justify-between mb-1">
+            <span className="text-[10px]" style={{ color: COLORS.textMuted }}>Context</span>
+            <span className="text-[10px] font-mono" style={{ color: COLORS.textDim }}>
+              {formatTokens(agent.tokensUsed)} / {formatTokens(agent.tokensMax)} ({contextPercent}%)
+            </span>
+          </div>
+          <ProgressBar percent={contextPercent} color={stateColor} />
         </div>
-      )}
 
-    </GlassCard>
+        {/* Stats row */}
+        <div className="flex gap-3 mb-3 text-[10px] font-mono" style={{ color: COLORS.textDim }}>
+          <span>{agent.toolCalls} tools</span>
+          <span>{agent.timeAlive.toFixed(1)}s alive</span>
+        </div>
+
+        {/* Current tool */}
+        {agent.currentTool && (
+          <div
+            className="mb-3 px-2 py-1.5 rounded text-[10px] font-mono flex items-center gap-2"
+            style={{
+              background: COLORS.toolIndicatorBg,
+              border: `1px solid ${COLORS.toolIndicatorBorder}`,
+              color: COLORS.toolIndicatorText,
+            }}
+          >
+            <span className="animate-spin inline-block">⚙</span>
+            {agent.currentTool}
+          </div>
+        )}
+      </div>
+    </FloatingPanel>
   )
-}
+}, agentDetailCardEqual)

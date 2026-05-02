@@ -27,3 +27,12 @@ extension/.vscode/
 extension/package-lock.json
 
 .DS_Store
+
+# Local dev server output
+.dev.log
+
+# Wire-format simulator output
+.sim-sessions/
+
+# Stray dev-tooling artifact (clone left by an external launcher)
+instance_0_source/

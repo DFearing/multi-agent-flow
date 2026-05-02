@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
-import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
+import { TimelineEvent } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 
 interface ControlBarProps {
@@ -85,6 +85,16 @@ function useScrubberEvents(timelineEvents: TimelineEvent[], totalDuration: numbe
   return fullEventsRef.current
 }
 
+// Outer chrome shared by both live and review modes — a thin top divider so
+// the bar reads as a separate region from the canvas above it.
+const BAR_WRAPPER_STYLE: React.CSSProperties = {
+  flexShrink: 0,
+  borderTop: `1px solid ${COLORS.holoBorder06}`,
+  background: 'rgba(10, 15, 30, 0.55)',
+  backdropFilter: 'blur(8px)',
+  WebkitBackdropFilter: 'blur(8px)',
+}
+
 export function ControlBar(props: ControlBarProps) {
   const { isReviewing = false } = props
   return isReviewing ? <ReviewControlBar {...props} /> : <LiveControlBar {...props} />
@@ -94,32 +104,19 @@ export function ControlBar(props: ControlBarProps) {
 
 function LiveControlBar({
   currentTime, totalDuration, timelineEvents,
-  eventCount = 0, onEnterReview, isReviewing,
+  eventCount = 0, onEnterReview,
 }: ControlBarProps) {
-  const [pulseOn, setPulseOn] = useState(true)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
 
-  useEffect(() => {
-    if (isReviewing) return
-    const interval = setInterval(() => setPulseOn(p => !p), TIMING.livePulseMs)
-    return () => clearInterval(interval)
-  }, [isReviewing])
-
   return (
-    <div
-      className="absolute bottom-4 left-4 right-4 mx-auto"
-      style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
-    >
-      <div className="glass-card px-5 py-3 flex items-center gap-3">
-        {/* LIVE badge */}
+    <div style={BAR_WRAPPER_STYLE}>
+      <div className="px-3 py-2 flex items-center gap-2">
+        {/* LIVE badge — pulse is a pure CSS animation (see globals.css)
+         *  so N canvases cost zero JS timers / zero React re-renders for it. */}
         <div className="flex items-center gap-1.5 shrink-0">
           <span
-            className="w-2 h-2 rounded-full transition-opacity duration-500"
-            style={{
-              background: COLORS.liveDot,
-              boxShadow: pulseOn ? `0 0 8px ${COLORS.liveDot}, 0 0 16px rgba(255,68,68,0.3)` : `0 0 4px ${COLORS.liveDot}80`,
-              opacity: pulseOn ? 1 : 0.6,
-            }}
+            className="w-2 h-2 rounded-full live-pulse-dot"
+            style={{ background: COLORS.liveDot }}
           />
           <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.liveText }}>
             LIVE
@@ -156,7 +153,7 @@ function LiveControlBar({
             color: COLORS.textPrimary,
           }}
         >
-          ⏸ Review
+          Review
         </button>
       </div>
     </div>
@@ -197,28 +194,25 @@ function ReviewControlBar({
   }, [isScrubbing, scrubToClientX])
 
   return (
-    <div
-      className="absolute bottom-4 left-4 right-4 mx-auto"
-      style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
-    >
-      <div className="glass-card px-5 py-3 flex items-center gap-3">
+    <div style={BAR_WRAPPER_STYLE}>
+      <div className="px-3 py-2 flex items-center gap-2">
         {/* Play/Pause */}
         <button
           onClick={onPlayPause}
-          className="w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 hover:scale-110"
+          className="w-7 h-7 rounded-full flex items-center justify-center transition-all shrink-0 hover:scale-110"
           style={{
             background: isPlaying ? COLORS.playBtnActiveBg : COLORS.playBtnBg,
             border: `1.5px solid ${COLORS.playBtnBorder}`,
             boxShadow: COLORS.playBtnGlow,
           }}
         >
-          <span style={{ color: COLORS.textPrimary, fontSize: 14, marginLeft: isPlaying ? 0 : 2 }}>
-            {isPlaying ? '⏸' : '▶'}
+          <span style={{ color: COLORS.textPrimary, fontSize: 12, marginLeft: isPlaying ? 0 : 1 }}>
+            {isPlaying ? '||' : '>'}
           </span>
         </button>
 
         {/* Time */}
-        <span className="text-xs font-mono shrink-0" style={{ color: COLORS.textPrimary, minWidth: 42 }}>
+        <span className="text-xs font-mono shrink-0" style={{ color: COLORS.textPrimary, minWidth: 36 }}>
           {formatTime(currentTime)}
         </span>
 
@@ -277,7 +271,7 @@ function ReviewControlBar({
             <button
               key={s}
               onClick={() => onSpeedChange(s)}
-              className="px-2 py-0.5 rounded text-[10px] font-mono transition-all"
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono transition-all"
               style={{
                 background: speed === s ? COLORS.playBtnActiveBg : 'transparent',
                 color: speed === s ? COLORS.textPrimary : COLORS.textMuted,
@@ -299,7 +293,7 @@ function ReviewControlBar({
               color: COLORS.liveText,
             }}
           >
-            ▶ LIVE
+            LIVE
           </button>
         )}
 
@@ -310,7 +304,7 @@ function ReviewControlBar({
             className="text-sm transition-all shrink-0 hover:scale-110"
             style={{ color: COLORS.textDim }}
           >
-            ⟲
+            R
           </button>
         )}
       </div>

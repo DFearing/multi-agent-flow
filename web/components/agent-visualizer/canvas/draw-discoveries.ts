@@ -2,11 +2,19 @@ import { Agent, Discovery } from '@/lib/agent-types'
 import { COLORS, getDiscoveryTypeColor } from '@/lib/colors'
 import { getDiscoveryCardDimensions } from '@/lib/canvas-constants'
 import { truncateText } from './draw-misc'
+import { type ViewBounds, isPointVisible, isRectVisible } from './viewport'
 
-export function drawDiscoveryConnections(ctx: CanvasRenderingContext2D, discoveries: Discovery[], agents: Map<string, Agent>) {
+export function drawDiscoveryConnections(
+  ctx: CanvasRenderingContext2D, discoveries: Discovery[], agents: Map<string, Agent>,
+  bounds?: ViewBounds,
+) {
   for (const disc of discoveries) {
     const agent = agents.get(disc.agentId)
     if (!agent || disc.opacity < 0.1) continue
+
+    // Skip if both endpoints are outside the viewport — the connection line
+    // is short and dashed, so we don't bother with a tighter check.
+    if (bounds && !isPointVisible(agent.x, agent.y, bounds, 32) && !isPointVisible(disc.x, disc.y, bounds, 32)) continue
 
     ctx.save()
     ctx.globalAlpha = disc.opacity * 0.3
@@ -22,17 +30,24 @@ export function drawDiscoveryConnections(ctx: CanvasRenderingContext2D, discover
   }
 }
 
-export function drawDiscoveries(ctx: CanvasRenderingContext2D, discoveries: Discovery[], agents: Map<string, Agent>, selectedDiscoveryId?: string | null) {
+export function drawDiscoveries(
+  ctx: CanvasRenderingContext2D, discoveries: Discovery[], agents: Map<string, Agent>,
+  selectedDiscoveryId?: string | null,
+  bounds?: ViewBounds,
+) {
   for (const disc of discoveries) {
     if (disc.opacity < 0.05) continue
-
-    ctx.save()
-    ctx.globalAlpha = disc.opacity
 
     const lines = disc.content.split('\n')
     const { cardW, cardH } = getDiscoveryCardDimensions(disc.label, lines)
     const cardX = disc.x - cardW / 2
     const cardY = disc.y - cardH / 2
+
+    // Skip cards entirely outside the viewport. Margin covers selection glow.
+    if (bounds && !isRectVisible(cardX - 12, cardY - 12, cardW + 24, cardH + 24, bounds)) continue
+
+    ctx.save()
+    ctx.globalAlpha = disc.opacity
 
     const isSelected = disc.id === selectedDiscoveryId
 

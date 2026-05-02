@@ -87,6 +87,12 @@ const HEX_OFFSETS = Array.from({ length: 6 }, (_, i) => {
   return { cos: Math.cos(angle), sin: Math.sin(angle) }
 })
 
+// Reused alpha → coordinate buckets for the hex grid. Drawn each frame; we
+// keep the Map and its value arrays alive across frames and just reset
+// array.length, instead of allocating a fresh Map + ~40 fresh arrays per
+// frame as the grid was previously doing.
+const HEX_BUCKETS = new Map<number, number[]>()
+
 function drawHexGrid(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -109,8 +115,11 @@ function drawHexGrid(
   ctx.strokeStyle = COLORS.hexGrid
   ctx.lineWidth = 0.5
 
-  // Quantize alpha into buckets to batch hexagons into fewer draw calls
-  const buckets = new Map<number, Array<[number, number]>>()
+  // Quantize alpha into buckets to batch hexagons into fewer draw calls.
+  // Reset the persistent buckets to empty without dropping their backing
+  // arrays — the alpha set across frames is small (~40 quantized levels),
+  // so the keys we'll re-encounter dominate.
+  for (const arr of HEX_BUCKETS.values()) arr.length = 0
   const timeSin = time * 0.5
 
   for (let x = startX; x < endX; x += size * 1.5) {
@@ -122,20 +131,24 @@ function drawHexGrid(
       const pulse = Math.sin(timeSin + dist * 0.005) * 0.3 + 0.7
       // Quantize to 4 alpha levels to batch draws
       const alpha = Math.round(0.15 * pulse * 40) / 40
-      let bucket = buckets.get(alpha)
-      if (!bucket) { bucket = []; buckets.set(alpha, bucket) }
-      bucket.push([cx, cy])
+      let bucket = HEX_BUCKETS.get(alpha)
+      if (!bucket) { bucket = []; HEX_BUCKETS.set(alpha, bucket) }
+      // Store coords as flat pairs to avoid the [x, y] tuple allocation per cell.
+      bucket.push(cx, cy)
     }
   }
 
   // Draw each alpha bucket as a single batched path
-  for (const [alpha, hexes] of buckets) {
+  for (const [alpha, coords] of HEX_BUCKETS) {
+    if (coords.length === 0) continue
     ctx.globalAlpha = alpha
     ctx.beginPath()
-    for (const [cx, cy] of hexes) {
+    for (let i = 0; i < coords.length; i += 2) {
+      const cx = coords[i]
+      const cy = coords[i + 1]
       ctx.moveTo(cx + r * HEX_OFFSETS[0].cos, cy + r * HEX_OFFSETS[0].sin)
-      for (let i = 1; i < 6; i++) {
-        ctx.lineTo(cx + r * HEX_OFFSETS[i].cos, cy + r * HEX_OFFSETS[i].sin)
+      for (let v = 1; v < 6; v++) {
+        ctx.lineTo(cx + r * HEX_OFFSETS[v].cos, cy + r * HEX_OFFSETS[v].sin)
       }
       ctx.closePath()
     }

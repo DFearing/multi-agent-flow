@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { COLORS } from '@/lib/colors'
 import { ToolContentRenderer } from './tool-content-renderer'
 import type { ConversationMessage } from '@/hooks/simulation/types'
@@ -8,12 +8,17 @@ import type { ConversationMessage } from '@/hooks/simulation/types'
 // ─── Shared message rendering utilities ──────────────────────────────────────
 
 export function HighlightText({ text, query }: { text: string; query?: string }) {
-  if (!query || !query.trim()) return <>{text}</>
-  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
+  const regex = useMemo(() => {
+    if (!query || !query.trim()) return null
+    return new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+  }, [query])
+
+  if (!regex) return <>{text}</>
+  const parts = text.split(regex)
   return (
     <>
       {parts.map((part, i) =>
-        part.toLowerCase() === query.toLowerCase()
+        part.toLowerCase() === query!.toLowerCase()
           ? <mark key={i} style={{ background: COLORS.searchHighlightBg, color: 'inherit', borderRadius: 2, padding: '0 1px' }}>{part}</mark>
           : part
       )}
@@ -21,7 +26,7 @@ export function HighlightText({ text, query }: { text: string; query?: string })
   )
 }
 
-export function TranscriptMessage({ message, compact = false, searchQuery }: { message: ConversationMessage; compact?: boolean; searchQuery?: string }) {
+export const TranscriptMessage = memo(function TranscriptMessage({ message, compact = false, searchQuery }: { message: ConversationMessage; compact?: boolean; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
 
   switch (message.type) {
@@ -149,4 +154,4 @@ export function TranscriptMessage({ message, compact = false, searchQuery }: { m
         </div>
       )
   }
-}
+})
