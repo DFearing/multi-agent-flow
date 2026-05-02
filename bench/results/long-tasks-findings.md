@@ -66,6 +66,31 @@ This is itself a finding worth filing separately (already accounted for in the s
 
 Each is linked back to #46.
 
+## Verification (2026-05-02, after PR #61 ship)
+
+PR #61 added a user-visible bloom on/off toggle. Re-ran the bench A/B at commit `3f2f4ac` (current main) with the existing harness modified to seed `localStorage` and force `effects.bloom=false` for the OFF arm.
+
+| metric | bloom ON | bloom OFF | Δ |
+|---|---|---|---|
+| FPS mean | 11.7 | 17.9 | **+53%** |
+| frame mean | 85.5 ms | 55.7 ms | −35% |
+| frame p95 | 115 ms | 83 ms | −28% |
+| **long-task total** | **81.9s** | **40.6s** | **−50%** |
+| long-task count | 1054 | 698 | −34% |
+| React commits | 1368 | 1517 | +11% (more frames → more commits) |
+
+**The 49.5% bloom finding above was correct.** Removing the bloom pass recovers ~41 of every 90 seconds of blocked main-thread time, almost exactly matching the profile's prediction. This vindicates the broader profile attribution and the open Canvas2D follow-up PRs (#62 hex-grid cache, #63 text/overlay caches) targeting the next-largest hot paths.
+
+Reproducer artifacts:
+- `bench/results/long-tasks-summary.json` (bloom ON)
+- `bench/results/long-tasks-summary-no-bloom.json` (bloom OFF)
+- `bench/results/long-tasks-profile-no-bloom.cpuprofile` (DevTools-loadable)
+- Run with: `node bench/profile-long-tasks.mjs --no-bloom`
+
+### Why a manual test in the dev server may not show this
+
+The bench drives 3 concurrent sim sessions under `concurrent` workload at 4× CPU throttle. With 1 canvas / 1 idle session at native CPU speed, bloom's per-frame cost (~2-3ms) is invisible inside a 16.7ms frame budget. Also, Chrome DevTools' built-in FPS meter measures compositor frames, not the canvas's `requestAnimationFrame` rate — they diverge under throttle. Use the `?perf` overlay (in-canvas FPS counter) and 3 sim sessions to reproduce manually.
+
 ## What remains unattributed
 
 - **21.4% in `(program)`** — V8's catch-all bucket. Almost certainly some mix of GC pauses, deoptimizations, and JIT compile/parse. To attribute, a future pass needs CDP `Tracing.start` with `disabled-by-default-v8.cpu_profiler` + `v8.runtime` categories (much more invasive than `Profiler.start`). Filing as a follow-up rather than a third hot-path issue because there's no actionable code change yet.

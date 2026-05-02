@@ -1,0 +1,32 @@
+{
+  "meta": {
+    "commit": "3f2f4ac",
+    "throttle": 4,
+    "warmupMs": 30000,
+    "measureMs": 90000,
+    "simCount": 3,
+    "bloom": false
+  },
+  "bench": {
+    "wallMs": 90163.5,
+    "frameCount": 1616,
+    "fpsMean": 17.92299544715988,
+    "frameMs": {
+      "mean": 55.731002475247536,
+      "p50": 54,
+      "p95": 83.30000000000291,
+      "p99": 93.80000000000291
+    },
+    "longTasks": {
+      "count": 698,
+      "totalMs": 40633,
+      "maxMs": 89
+    },
+    "reactCommits": 1517,
+    "heapBytes": {
+      "mean": 24799924,
+      "peak": 44105057,
+      "samples": 90
+    }
+  }
+}
