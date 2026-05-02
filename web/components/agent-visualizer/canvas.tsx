@@ -48,6 +48,9 @@ interface CanvasProps {
   /** When false, the Canvas2D bloom post-processing pass is skipped entirely.
    *  Defaults to true to preserve existing visual appearance. */
   bloomEnabled?: boolean
+  /** Run the bloom pass every Nth frame (1 = every frame). Intermediate frames
+   *  reuse the cached bloom output. Defaults to 1. */
+  bloomThrottle?: number
   /** Floor for the auto-fit scale. 0 (default) = no minimum. Manual wheel
    *  zoom is unaffected; this only constrains the auto-fit lerp. */
   minZoomLevel?: number
@@ -65,15 +68,20 @@ export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
-  bloomEnabled = true, minZoomLevel, pauseWhenOffscreen = true,
+  bloomEnabled = true, bloomThrottle = 1, minZoomLevel, pauseWhenOffscreen = true,
 }: CanvasProps) {
   const manager = useSimulationManager()
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+  const dimensionsRef = useRef(dimensions)
+  dimensionsRef.current = dimensions
   const timeRef = useRef(0)
   const simTimeRef = useRef(0)
   const bloomRef = useRef<BloomRenderer | null>(null)
+  const bloomFrameCounterRef = useRef(0)
+  const bloomThrottleRef = useRef(bloomThrottle)
+  bloomThrottleRef.current = bloomThrottle
   const depthParticlesRef = useRef<DepthParticle[]>([])
   const lastFrameTimeRef = useRef(0)
   const dprRef = useRef(1)
@@ -165,11 +173,20 @@ export function AgentCanvas({
 
   useEffect(() => {
     if (bloomEnabled) {
-      bloomRef.current = new BloomRenderer(0.5)
+      const bloom = new BloomRenderer(0.5)
+      // Fix: immediately resize so bloom works before the next ResizeObserver
+      // fires. Without this, the internal canvas stays 0x0 and apply() early-
+      // returns after toggling bloom off then back on.
+      const dpr = dprRef.current
+      const w = dimensionsRef.current.width
+      const h = dimensionsRef.current.height
+      if (w > 0 && h > 0) bloom.resize(w * dpr, h * dpr)
+      bloomRef.current = bloom
+      bloomFrameCounterRef.current = 0
     } else {
       bloomRef.current = null
     }
-    depthParticlesRef.current = createDepthParticles(dimensions.width, dimensions.height)
+    depthParticlesRef.current = createDepthParticles(dimensionsRef.current.width, dimensionsRef.current.height)
     return () => { bloomRef.current = null }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- particles created once, resized by draw loop
   }, [bloomEnabled])
@@ -339,7 +356,21 @@ export function AgentCanvas({
 
       ctx.restore()
 
-      if (bloomRef.current) bloomRef.current.apply(canvas, ctx)
+      // Bloom post-processing — throttled when bloomThrottle > 1.
+      // On "render" frames we run the full blur+composite pipeline.
+      // On "skip" frames we re-composite the last blur result via applyCache
+      // (same additive blend, no blur work) so the glow doesn't flicker.
+      if (bloomRef.current) {
+        const throttle = bloomThrottleRef.current
+        const frame = bloomFrameCounterRef.current
+        bloomFrameCounterRef.current = frame + 1
+
+        if (throttle <= 1 || frame % throttle === 0) {
+          bloomRef.current.apply(canvas, ctx)
+        } else {
+          bloomRef.current.applyCache(canvas, ctx)
+        }
+      }
 
       // ─── Performance overlay (enabled via ?perf or ?stress) ──────────
       if (PERF_OVERLAY_ENABLED) {
