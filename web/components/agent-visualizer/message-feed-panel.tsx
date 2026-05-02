@@ -1,53 +1,86 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
-import { Agent, type AgentState } from '@/lib/agent-types'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { Agent } from '@/lib/agent-types'
 import { COLORS, ROLE_COLORS, colorForSession, getStateColor } from '@/lib/colors'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { useVirtualList } from '@/hooks/use-virtual-list'
 import { mergeByTimestamp } from '@/lib/sort-utils'
 import { FloatingPanel } from './floating-panel'
+import { useSessionStatsSel, type SessionStats } from './session-stats-provider'
 
 interface MessageFeedPanelProps {
-  conversations: Map<string, ConversationMessage[]>
-  agents: Map<string, Agent>
-  /** agentId → sessionId, so each row can render a colored dot identifying
-   *  which session it came from. Only matters when conversations span more
-   *  than one session; falls back to no dot when missing. */
-  agentToSession?: Map<string, string>
+  /** Set of visible session ids — only these sessions contribute messages. */
+  visibleSessionIds: ReadonlySet<string>
   onAgentClick: (agentId: string | null) => void
   selectedAgentId: string | null
   onClose?: () => void
 }
 
-// Only show text messages (assistant, user, thinking) — tool calls visible via agent selection
+// Only show text messages (assistant, user, thinking)
 const TEXT_TYPES = new Set(['assistant', 'user', 'thinking'])
 
 const TAB_AGENT_NAME_MAX = 14
 
 const MESSAGE_GAP = 4
 
-/** Conversation message decorated with a duplicate-collapse count. The
- *  feed renders one row per consecutive run of identical messages and
- *  shows ×N when count > 1. */
 interface DedupedMessage extends ConversationMessage {
   agentId: string
   count: number
   lastTimestamp: number
 }
 
-// mergeByTimestamp imported from @/lib/sort-utils
+// ─── Feed data selector ────────────────────────────────────────────────────
+
+type FeedData = {
+  conversations: Map<string, ConversationMessage[]>
+  agents: Map<string, Agent>
+  agentToSession: Map<string, string>
+}
+
+function feedDataEqual(a: FeedData, b: FeedData): boolean {
+  if (a.conversations === b.conversations && a.agents === b.agents) return true
+  if (a.conversations.size !== b.conversations.size || a.agents.size !== b.agents.size) return false
+  for (const [k, v] of a.conversations) {
+    if (b.conversations.get(k) !== v) return false
+  }
+  for (const [k, v] of a.agents) {
+    if (b.agents.get(k) !== v) return false
+  }
+  return true
+}
 
 // ─── Main component ─────────────────────────────────────────────────────────
 
 export function MessageFeedPanel({
-  conversations,
-  agents,
-  agentToSession,
+  visibleSessionIds,
   onAgentClick,
   selectedAgentId,
   onClose,
 }: MessageFeedPanelProps) {
+  // Select only conversations and agents for visible sessions from the store.
+  const feedData = useSessionStatsSel(
+    useCallback((snap: ReadonlyMap<string, SessionStats>): FeedData => {
+      const conversations = new Map<string, ConversationMessage[]>()
+      const agents = new Map<string, Agent>()
+      const agentToSession = new Map<string, string>()
+      for (const [sid, stats] of snap) {
+        if (!visibleSessionIds.has(sid)) continue
+        for (const [agentId, msgs] of stats.conversations) {
+          conversations.set(`${sid}:${agentId}`, msgs)
+        }
+        for (const [agentId, ag] of stats.agents) {
+          agents.set(`${sid}:${agentId}`, ag)
+          agentToSession.set(`${sid}:${agentId}`, sid)
+        }
+      }
+      return { conversations, agents, agentToSession }
+    }, [visibleSessionIds]),
+    feedDataEqual,
+  )
+
+  const { conversations, agents, agentToSession } = feedData
+
   const [activeTab, setActiveTab] = useState<string>('all')
   const [unread, setUnread] = useState<Set<string>>(new Set())
   const logRef = useRef<HTMLDivElement>(null)
@@ -98,11 +131,6 @@ export function MessageFeedPanel({
     }
 
     if (activeTab === 'all') {
-      // Collect new messages from each agent into a batch (each agent's
-      // conversation is itself already sorted by timestamp), sort the batch,
-      // then merge it with the existing sorted cache. O(M log M + N + M)
-      // instead of O((N+M) log (N+M)) — meaningful as N grows past a few
-      // hundred messages in long-running sessions.
       const newItems: (ConversationMessage & { agentId: string })[] = []
       for (const [agentId, msgs] of conversations) {
         if (!currentAgents.has(agentId)) continue
@@ -133,11 +161,7 @@ export function MessageFeedPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations, activeTab, agentKey])
 
-  // Collapse runs of consecutive identical messages — same agent, same role,
-  // same content text — into a single row with a count badge. Tools and
-  // workers often spam the same line repeatedly; the deduped view keeps the
-  // feed scannable. Cheap to recompute since it's a single linear pass over
-  // an already-cached array.
+  // Collapse runs of consecutive identical messages
   const dedupedMessages = useMemo<readonly DedupedMessage[]>(() => {
     if (messages.length === 0) return []
     const out: DedupedMessage[] = []
@@ -149,9 +173,6 @@ export function MessageFeedPanel({
         && last.type === msg.type
         && last.content === msg.content
       ) {
-        // Merge this duplicate into the previous entry. We track lastTimestamp
-        // separately so the count badge stays close to the latest occurrence
-        // visually but the row's primary timestamp (sort key) doesn't shift.
         last.count++
         last.lastTimestamp = msg.timestamp
       } else {
@@ -161,8 +182,7 @@ export function MessageFeedPanel({
     return out
   }, [messages])
 
-  // Virtual list with auto-scroll — operate on the deduped feed so collapsed
-  // runs don't blow up the height/measure cache.
+  // Virtual list with auto-scroll
   const {
     visibleItems, totalHeight, offsetTop,
     handleScroll, measureRef,
@@ -262,7 +282,7 @@ export function MessageFeedPanel({
             <div style={{ height: totalHeight, position: 'relative' }}>
               <div style={{ position: 'absolute', top: offsetTop, left: 0, right: 0 }}>
                 {visibleItems.map((msg) => {
-                  const sid = agentToSession?.get(msg.agentId)
+                  const sid = agentToSession.get(msg.agentId)
                   const sessionDot = sid ? colorForSession(sid).accent : null
                   return (
                     <div
@@ -326,10 +346,6 @@ function TabButton({ label, active, onClick, color, hasUnread }: {
 
 const MESSAGE_LINE_CLAMP = 3
 
-// Approximate visible characters per line for the 9px monospace text used
-// in the feed at typical panel widths (320–720px). Used by the overflow
-// heuristic below; conservative on the low side so we lean towards showing
-// the "more" toggle on borderline messages.
 const APPROX_CHARS_PER_LINE = 50
 
 function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessionDot, repeatCount, onClick }: {
@@ -338,24 +354,13 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
   agentName: string
   showAgent: boolean
   isSelected: boolean
-  /** Per-session accent color, rendered as a small dot in the header. Null
-   *  when there's only one session (or the parent didn't pass agentToSession). */
   sessionDot: string | null
-  /** Number of consecutive identical messages collapsed into this row. >1
-   *  renders a "×N" badge so the user can see something repeated rather
-   *  than guess from a sparser feed. */
   repeatCount?: number
   onClick: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const role = ROLE_COLORS[message.type] ?? ROLE_COLORS.assistant
 
-  // Content-based overflow heuristic — replaces a per-row ResizeObserver +
-  // scrollHeight measurement that was running for every visible message
-  // (and re-running on every width change, message change, or expand). The
-  // heuristic loses a little precision on borderline single-line messages
-  // when the panel is resized wider than expected, but eliminates the
-  // observer churn that compounds as the message list grows.
   const overflowsContent = useMemo(() => {
     const c = message.content
     const newlineCount = (c.match(/\n/g) || []).length
@@ -411,17 +416,17 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
               flexShrink: 0,
             }}
           >
-            ×{repeatCount}
+            x{repeatCount}
           </span>
         )}
       </div>
 
-      {/* Content — line-clamped when collapsed; CSS handles ellipsis only when actually overflowing. */}
+      {/* Content */}
       <div
         className="text-[9px] font-mono leading-relaxed whitespace-pre-wrap break-words"
         style={{
           color: role.text,
-          ...(expanded ? null : {
+          ...(expanded ? {} : {
             display: '-webkit-box',
             WebkitLineClamp: MESSAGE_LINE_CLAMP,
             WebkitBoxOrient: 'vertical' as const,
@@ -432,7 +437,6 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
         {message.content}
       </div>
 
-      {/* Show toggle only if currently overflowing or already expanded. */}
       {(expanded || isOverflowing) && (() => {
         const totalLines = message.content.split('\n').length
         return (
@@ -441,7 +445,7 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
             style={{ color: COLORS.textMuted }}
             onClick={(e) => { e.stopPropagation(); setExpanded(prev => !prev) }}
           >
-            {expanded ? '▴ less' : `▾ more (${totalLines} ${totalLines === 1 ? 'line' : 'lines'})`}
+            {expanded ? '< less' : `> more (${totalLines} ${totalLines === 1 ? 'line' : 'lines'})`}
           </button>
         )
       })()}

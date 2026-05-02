@@ -1,43 +1,56 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { COLORS } from '@/lib/colors'
 import { formatTokens } from '@/lib/utils'
 import { agentCost } from './canvas/draw-cost'
 import { FloatingPanel } from './floating-panel'
-import { useSessionStatsData } from './session-stats-provider'
+import { useSessionStatsSel, type SessionStats } from './session-stats-provider'
 
 interface CostSummaryPanelProps {
   visible: boolean
   onClose: () => void
 }
 
-export function CostSummaryPanel({ visible, onClose }: CostSummaryPanelProps) {
-  const perSession = useSessionStatsData()
-
-  const summary = useMemo(() => {
-    let totalTokens = 0
-    const agents: { name: string; tokens: number; cost: number }[] = []
-    const toolBreakdown = new Map<string, number>()
-    for (const [, stats] of perSession) {
-      for (const [, agent] of stats.agents) {
-        if (agent.tokensUsed > 0) {
-          totalTokens += agent.tokensUsed
-          agents.push({ name: agent.name, tokens: agent.tokensUsed, cost: agentCost(agent.tokensUsed) })
-        }
-      }
-      for (const [, tc] of stats.toolCalls) {
-        if (tc.tokenCost) {
-          toolBreakdown.set(tc.toolName, (toolBreakdown.get(tc.toolName) || 0) + tc.tokenCost)
-        }
+/** Selector: compute total cost and per-agent/per-tool breakdowns.
+ *  Only triggers a re-render when the total token count changes. */
+function selectCostSummary(perSession: ReadonlyMap<string, SessionStats>) {
+  let totalTokens = 0
+  const agents: { name: string; tokens: number; cost: number }[] = []
+  const toolBreakdown = new Map<string, number>()
+  for (const [, stats] of perSession) {
+    for (const [, agent] of stats.agents) {
+      if (agent.tokensUsed > 0) {
+        totalTokens += agent.tokensUsed
+        agents.push({ name: agent.name, tokens: agent.tokensUsed, cost: agentCost(agent.tokensUsed) })
       }
     }
-    agents.sort((a, b) => b.cost - a.cost)
-    const tools = Array.from(toolBreakdown.entries())
-      .map(([name, tokens]) => ({ name, tokens, cost: agentCost(tokens) }))
-      .sort((a, b) => b.cost - a.cost)
-    return { totalTokens, totalCost: agentCost(totalTokens), agents, tools }
-  }, [perSession])
+    for (const [, tc] of stats.toolCalls) {
+      if (tc.tokenCost) {
+        toolBreakdown.set(tc.toolName, (toolBreakdown.get(tc.toolName) || 0) + tc.tokenCost)
+      }
+    }
+  }
+  agents.sort((a, b) => b.cost - a.cost)
+  const tools = Array.from(toolBreakdown.entries())
+    .map(([name, tokens]) => ({ name, tokens, cost: agentCost(tokens) }))
+    .sort((a, b) => b.cost - a.cost)
+  return { totalTokens, totalCost: agentCost(totalTokens), agents, tools }
+}
+
+/** Equality: only re-render when total token count shifts. */
+function costEqual(
+  a: ReturnType<typeof selectCostSummary>,
+  b: ReturnType<typeof selectCostSummary>,
+): boolean {
+  return a.totalTokens === b.totalTokens
+}
+
+export function CostSummaryPanel({ visible, onClose }: CostSummaryPanelProps) {
+  const summary = useSessionStatsSel(
+    useCallback(selectCostSummary, []),
+    costEqual,
+  )
 
   const [defaultRect] = useState(() => {
     if (typeof window === 'undefined') return { x: 800, y: 80, w: 280, h: 360 }
