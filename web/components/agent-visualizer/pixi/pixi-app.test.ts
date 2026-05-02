@@ -5,32 +5,17 @@
  *   - Singleton renderer: multiple acquires share one Application
  *   - Viewport registration / deregistration
  *   - Ref counting: release when all viewports gone
+ *   - multiView init and direct render-to-canvas
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ─── Mock pixi.js ────────────────────────────────────────────────────────
 
-const mockCtx = {
-  font: '',
-  textBaseline: '',
-  fillStyle: '',
-  measureText: (text: string) => ({ width: text.length * 6 }),
-  fillText: vi.fn(),
-  clearRect: vi.fn(),
-  drawImage: vi.fn(),
-}
-
 const origCreateElement = document.createElement.bind(document)
-vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
-  const el = origCreateElement(tag)
-  if (tag === 'canvas') {
-    (el as HTMLCanvasElement).getContext = (() => mockCtx) as unknown as HTMLCanvasElement['getContext']
-  }
-  return el
-})
 
 let appInstanceCount = 0
+let lastInitOpts: Record<string, unknown> | null = null
 
 vi.mock('pixi.js', () => {
   class MockContainer {
@@ -60,12 +45,6 @@ vi.mock('pixi.js', () => {
     static from(_opts: unknown): MockTexture { return new MockTexture() }
   }
 
-  class MockRenderTexture {
-    _destroyed = false
-    destroy() { this._destroyed = true }
-    static create(_opts: unknown): MockRenderTexture { return new MockRenderTexture() }
-  }
-
   class MockRectangle {
     x: number; y: number; width: number; height: number
     constructor(x = 0, y = 0, w = 0, h = 0) {
@@ -79,9 +58,6 @@ vi.mock('pixi.js', () => {
     renderer = {
       resolution: 1,
       render: vi.fn(),
-      extract: {
-        canvas: vi.fn(() => origCreateElement('canvas')),
-      },
       destroy: vi.fn(),
     }
     _destroyed = false
@@ -90,8 +66,8 @@ vi.mock('pixi.js', () => {
       appInstanceCount++
     }
 
-    async init(_opts: unknown) {
-      // no-op
+    async init(opts: Record<string, unknown>) {
+      lastInitOpts = opts
     }
 
     destroy() {
@@ -103,7 +79,6 @@ vi.mock('pixi.js', () => {
     Application: MockApplication,
     Container: MockContainer,
     Texture: MockTexture,
-    RenderTexture: MockRenderTexture,
     Rectangle: MockRectangle,
   }
 })
@@ -115,6 +90,8 @@ import {
   releaseSharedRenderer,
   registerViewport,
   deregisterViewport,
+  bindViewportCanvas,
+  renderViewport,
   getViewportCount,
   isSharedRendererActive,
 } from './pixi-app'
@@ -124,6 +101,7 @@ import {
 describe('Shared Pixi Renderer', () => {
   beforeEach(() => {
     appInstanceCount = 0
+    lastInitOpts = null
     // Clean up any leftover state from previous tests
     while (isSharedRendererActive()) {
       releaseSharedRenderer()
@@ -144,6 +122,16 @@ describe('Shared Pixi Renderer', () => {
     expect(appInstanceCount).toBe(1)
 
     releaseSharedRenderer()
+    releaseSharedRenderer()
+  })
+
+  it('initializes with multiView: true', async () => {
+    await acquireSharedRenderer()
+
+    expect(lastInitOpts).toBeDefined()
+    expect(lastInitOpts!.multiView).toBe(true)
+    expect(lastInitOpts!.preference).toBe('webgl')
+
     releaseSharedRenderer()
   })
 
@@ -222,6 +210,58 @@ describe('Shared Pixi Renderer', () => {
     expect(app2).not.toBe(app1)
     expect(appInstanceCount).toBe(2)
 
+    releaseSharedRenderer()
+  })
+
+  it('renderViewport calls renderer.render with target canvas and clear', async () => {
+    const app = await acquireSharedRenderer()
+    registerViewport('vp-render')
+
+    const canvas = origCreateElement('canvas')
+    bindViewportCanvas('vp-render', canvas, 800, 600)
+
+    const vp = registerViewport('vp-render') // returns existing
+
+    renderViewport('vp-render')
+
+    const renderMock = app.renderer.render as ReturnType<typeof vi.fn>
+    expect(renderMock).toHaveBeenCalledTimes(1)
+    expect(renderMock).toHaveBeenCalledWith({
+      container: vp.stage,
+      target: canvas,
+      clear: true,
+    })
+
+    deregisterViewport('vp-render')
+    releaseSharedRenderer()
+  })
+
+  it('renderViewport does not call extract.canvas', async () => {
+    const app = await acquireSharedRenderer()
+    registerViewport('vp-noextract')
+
+    const canvas = origCreateElement('canvas')
+    bindViewportCanvas('vp-noextract', canvas, 400, 300)
+
+    renderViewport('vp-noextract')
+
+    // The renderer should not have an extract property used
+    expect((app.renderer as unknown as Record<string, unknown>).extract).toBeUndefined()
+
+    deregisterViewport('vp-noextract')
+    releaseSharedRenderer()
+  })
+
+  it('renderViewport is a no-op when canvas is not bound', async () => {
+    const app = await acquireSharedRenderer()
+    registerViewport('vp-nocanvas')
+
+    renderViewport('vp-nocanvas')
+
+    const renderMock = app.renderer.render as ReturnType<typeof vi.fn>
+    expect(renderMock).not.toHaveBeenCalled()
+
+    deregisterViewport('vp-nocanvas')
     releaseSharedRenderer()
   })
 })

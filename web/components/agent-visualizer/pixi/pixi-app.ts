@@ -1,14 +1,16 @@
 /**
- * Shared Pixi v8 renderer — singleton GL context + multi-viewport.
+ * Shared Pixi v8 renderer — singleton GL context + multi-viewport via multiView.
  *
  * Architecture:
- *   - ONE Application (one GL context, one offscreen WebGL canvas).
+ *   - ONE Application with `multiView: true` (one hidden GL canvas, one
+ *     WebGL context shared across all viewports).
  *   - N viewports: each PixiCanvas registers a viewport on mount and
  *     deregisters on unmount.
  *   - Each viewport owns a Container (its scene-graph subtree) and a
- *     RenderTexture. On each frame, the shared renderer renders the
- *     viewport's container into its RenderTexture, then blits the result
- *     to the viewport's visible <canvas> via Canvas2D drawImage.
+ *     visible <canvas>. On each frame, the shared renderer renders the
+ *     viewport's container directly to its visible canvas via
+ *     `renderer.render({ container, target: canvas, clear: true })`.
+ *     Pixi's multiView postrender handles the internal blit.
  *   - Texture atlases (glyphs, glow sprites, circle sprites) live on the
  *     shared renderer — no per-canvas duplication.
  *
@@ -17,7 +19,7 @@
  * calls sharedRenderer.renderViewport() for its viewport id.
  */
 
-import { Application, Container, RenderTexture, Texture } from 'pixi.js'
+import { Application, Container, Texture } from 'pixi.js'
 
 // ─── Viewport registry ─────────────────────────────────────────────────────
 
@@ -27,12 +29,8 @@ export interface Viewport {
   id: string
   /** Root container for this viewport's scene graph. */
   stage: Container
-  /** Off-screen render texture sized to this viewport's dimensions. */
-  renderTexture: RenderTexture | null
   /** The visible <canvas> element in the DOM for this viewport. */
   canvas: HTMLCanvasElement | null
-  /** Canvas 2D context for blitting the render texture to the visible canvas. */
-  ctx: CanvasRenderingContext2D | null
   /** Current viewport dimensions in CSS pixels. */
   width: number
   height: number
@@ -77,14 +75,13 @@ export async function acquireSharedRenderer(): Promise<Application> {
   }
   shared = state
 
-  // Create a hidden offscreen canvas for the GL context. It won't be
-  // appended to the DOM — rendering goes through RenderTextures.
   state.initPromise = app.init({
     backgroundColor: 0x050510,
     antialias: true,
     resolution: typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
     autoDensity: true,
     preference: 'webgl',
+    multiView: true,
     width: 1,
     height: 1,
   }).then(() => {
@@ -105,7 +102,6 @@ export function releaseSharedRenderer(): void {
   shared.refCount--
   if (shared.refCount <= 0) {
     for (const vp of shared.viewports.values()) {
-      if (vp.renderTexture) vp.renderTexture.destroy(true)
       vp.stage.destroy({ children: true })
     }
     shared.viewports.clear()
@@ -139,9 +135,7 @@ export function registerViewport(id: string): Viewport {
   const viewport: Viewport = {
     id,
     stage,
-    renderTexture: null,
     canvas: null,
-    ctx: null,
     width: 0,
     height: 0,
   }
@@ -150,17 +144,13 @@ export function registerViewport(id: string): Viewport {
 }
 
 /**
- * Deregister a viewport and free its RenderTexture. The stage Container
- * is destroyed along with its children.
+ * Deregister a viewport. The stage Container is destroyed along with
+ * its children.
  */
 export function deregisterViewport(id: string): void {
   if (!shared) return
   const vp = shared.viewports.get(id)
   if (!vp) return
-  if (vp.renderTexture) {
-    vp.renderTexture.destroy(true)
-    vp.renderTexture = null
-  }
   vp.stage.destroy({ children: true })
   shared.viewports.delete(id)
 }
@@ -180,38 +170,24 @@ export function bindViewportCanvas(
   if (!vp) return
 
   vp.canvas = canvas
-  vp.ctx = canvas.getContext('2d')
   resizeViewport(id, width, height)
 }
 
 /**
- * Resize a viewport's RenderTexture to match new dimensions.
+ * Resize a viewport's visible canvas backing store to match new dimensions.
  */
 export function resizeViewport(id: string, width: number, height: number): void {
   if (!shared || !shared.ready) return
   const vp = shared.viewports.get(id)
   if (!vp) return
   if (width <= 0 || height <= 0) return
-  if (vp.width === width && vp.height === height && vp.renderTexture) return
+  if (vp.width === width && vp.height === height) return
 
   vp.width = width
   vp.height = height
 
   const resolution = shared.app.renderer.resolution
 
-  // Destroy old render texture
-  if (vp.renderTexture) {
-    vp.renderTexture.destroy(true)
-  }
-
-  // Create new render texture at the viewport's size
-  vp.renderTexture = RenderTexture.create({
-    width: width,
-    height: height,
-    resolution,
-  })
-
-  // Also resize the visible canvas backing store
   if (vp.canvas) {
     vp.canvas.width = Math.round(width * resolution)
     vp.canvas.height = Math.round(height * resolution)
@@ -219,33 +195,20 @@ export function resizeViewport(id: string, width: number, height: number): void 
 }
 
 /**
- * Render a viewport's scene graph to its RenderTexture, then blit to
- * the visible canvas. Called once per viewport per frame from the
- * PixiCanvas draw callback.
+ * Render a viewport's scene graph directly to its visible canvas via
+ * multiView. Called once per viewport per frame from the PixiCanvas
+ * draw callback.
  */
 export function renderViewport(id: string): void {
   if (!shared || !shared.ready) return
   const vp = shared.viewports.get(id)
-  if (!vp || !vp.renderTexture || !vp.canvas || !vp.ctx) return
+  if (!vp || !vp.canvas) return
 
-  const renderer = shared.app.renderer
-
-  // Render the viewport's scene graph into its RenderTexture
-  renderer.render({
+  shared.app.renderer.render({
     container: vp.stage,
-    target: vp.renderTexture,
+    target: vp.canvas,
     clear: true,
   })
-
-  // Extract pixels and blit to the visible canvas.
-  // The renderer's internal canvas holds the last render target's content
-  // after extract. We use extract.canvas() for a direct Canvas2D blit.
-  const pixels = renderer.extract.canvas(vp.renderTexture)
-  if (pixels) {
-    const ctx = vp.ctx
-    ctx.clearRect(0, 0, vp.canvas.width, vp.canvas.height)
-    ctx.drawImage(pixels as CanvasImageSource, 0, 0)
-  }
 }
 
 // ─── Texture helpers ────────────────────────────────────────────────────────
