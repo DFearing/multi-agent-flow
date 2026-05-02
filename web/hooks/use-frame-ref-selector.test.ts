@@ -87,4 +87,37 @@ describe('useFrameRefSelector', () => {
 
     expect(renderCount.value).toBeGreaterThan(afterInit)
   })
+
+  it('mounts N selectors but registers only one shared timer', () => {
+    // Regression guard for the multi-canvas perf fix: 12 selectors used to
+    // create 12 setIntervals (3 canvases × 4 selectors each), clustering
+    // wakeups into long-task fragments under CPU throttle. The shared
+    // ticker collapses them into a single setInterval.
+    const setIntervalSpy = vi.spyOn(global, 'setInterval')
+    const initialCalls = setIntervalSpy.mock.calls.length
+
+    const state = createEmptyState({ currentTime: 1, isPlaying: true })
+    const ref = { current: state }
+
+    const hooks = [
+      renderHook(() => useFrameRefSelector(ref, (s) => s.currentTime)),
+      renderHook(() => useFrameRefSelector(ref, (s) => s.isPlaying)),
+      renderHook(() => useFrameRefSelector(ref, (s) => s.speed)),
+      renderHook(() => useFrameRefSelector(ref, (s) => s.maxTime)),
+    ]
+
+    // 4 selectors mounted — only ONE additional setInterval should have fired.
+    expect(setIntervalSpy.mock.calls.length - initialCalls).toBe(1)
+
+    // Mounting more selectors must not allocate further intervals.
+    const more = [
+      renderHook(() => useFrameRefSelector(ref, (s) => s.currentTime)),
+      renderHook(() => useFrameRefSelector(ref, (s) => s.isPlaying)),
+    ]
+    expect(setIntervalSpy.mock.calls.length - initialCalls).toBe(1)
+
+    // Cleanup so the shared ticker doesn't leak across tests.
+    for (const h of [...hooks, ...more]) h.unmount()
+    setIntervalSpy.mockRestore()
+  })
 })
