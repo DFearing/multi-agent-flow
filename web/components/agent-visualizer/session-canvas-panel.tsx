@@ -16,6 +16,7 @@ import { FloatingPanel } from './floating-panel'
 import { CanvasZoomControl } from './canvas-zoom-control'
 import { useSessionStatsDispatch, type SessionStats } from './session-stats-provider'
 import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
+import type { EffectToggles } from '@/hooks/use-perf-settings'
 
 /** Cached once at module load — true when `?renderer=pixi` is present. */
 const USE_PIXI_RENDERER = typeof window !== 'undefined'
@@ -48,6 +49,7 @@ interface SessionCanvasPanelProps {
   showStats: boolean
   showHexGrid: boolean
   showCostOverlay: boolean
+  effects: EffectToggles
   zoomToFitTrigger: number
   pauseAutoFit: boolean
   getSessionEventLog: (sessionId: string) => readonly SimulationEvent[]
@@ -64,7 +66,7 @@ export function SessionCanvasPanel({
   sessionLabel,
   slot,
   selectedAgentId, hoveredAgentId, selectedToolCallId, selectedDiscoveryId,
-  showStats, showHexGrid, showCostOverlay,
+  showStats, showHexGrid, showCostOverlay, effects,
   zoomToFitTrigger, pauseAutoFit,
   getSessionEventLog,
   onAgentClick, onAgentHover,
@@ -275,6 +277,7 @@ export function SessionCanvasPanel({
               hoveredAgentId={hoveredAgentId}
               showStats={showStats}
               showHexGrid={showHexGrid}
+              effects={effects}
               zoomToFitTrigger={combinedZoomToFitTrigger}
               pauseAutoFit={pauseAutoFit}
               onAgentClick={(id) => onAgentClick(id, sessionId)}

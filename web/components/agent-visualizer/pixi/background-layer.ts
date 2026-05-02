@@ -110,6 +110,7 @@ export class BackgroundLayer {
     time: number,
     showHexGrid: boolean,
     activeAgentPos?: { x: number; y: number; color: string },
+    showDepthParticles: boolean = true,
   ): void {
     this.frameCount++
 
@@ -120,7 +121,8 @@ export class BackgroundLayer {
     }
 
     // ── Update depth particles (every other frame for perf) ──────────
-    if (this.frameCount % 2 === 0) {
+    this.particleContainer.visible = showDepthParticles
+    if (showDepthParticles && this.frameCount % 2 === 0) {
       this.updateParticles(dt * 2, width, height, transform)
     }
 

@@ -124,6 +124,14 @@ export interface SimulationManager {
    *  order. */
   registerRender(callback: RenderCallback): () => void
 
+  // ── Frame cap ───────────────────────────────────────────────────────────
+  /** Cap the rendering frame rate. Pass `null` (or 0) for "uncapped" — let
+   *  rAF run at the display refresh rate. A non-zero cap throttles the loop
+   *  by skipping rAF callbacks until the per-frame budget has elapsed.
+   *  Simulation deltas are still derived from real elapsed time, so motion
+   *  speed is preserved. */
+  setFrameCap(fps: number | null): void
+
   // ── Subscriptions (useSyncExternalStore compatible) ──────────────────────
   /** Subscribe to changes for a specific session. The listener fires when
    *  structural state changes (new events processed), not every frame. */
@@ -151,6 +159,10 @@ export function createSimulationManager(): SimulationManager {
   let rafId = 0
   let lastTimestamp = 0
   let running = false
+  /** User-selected frame cap in fps (e.g. 30, 60). 0/null = uncapped. */
+  let frameCapFps = 0
+  /** Timestamp (rAF) at which the most recent rendered frame was emitted. */
+  let lastRenderedTimestamp = 0
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -444,12 +456,26 @@ export function createSimulationManager(): SimulationManager {
       return
     }
 
+    // User-selected frame cap. We compare against the most recently rendered
+    // timestamp (not lastTimestamp, which advances even on skipped frames in
+    // the gate above) so the cap reflects actual emitted frames. We allow a
+    // small slack so a 60 Hz monitor can still hit a 60-fps cap when the rAF
+    // callback fires a hair early.
+    if (frameCapFps > 0 && lastRenderedTimestamp) {
+      const minInterval = 1000 / frameCapFps - 1
+      if (timestamp - lastRenderedTimestamp < minInterval) {
+        rafId = requestAnimationFrame(loop)
+        return
+      }
+    }
+
     if (!lastTimestamp) lastTimestamp = timestamp
     const deltaTime = Math.min(
       (timestamp - lastTimestamp) / 1000,
       ANIM_SPEED.maxDeltaTime,
     )
     lastTimestamp = timestamp
+    lastRenderedTimestamp = timestamp
 
     for (const [sessionId, sub] of sessions) {
       tickSession(sessionId, sub, timestamp, deltaTime)
@@ -707,6 +733,13 @@ export function createSimulationManager(): SimulationManager {
         const idx = renderCallbacks.indexOf(callback)
         if (idx >= 0) renderCallbacks.splice(idx, 1)
       }
+    },
+
+    setFrameCap(fps) {
+      frameCapFps = fps && fps > 0 ? fps : 0
+      // Reset so the next frame renders immediately rather than waiting out
+      // a stale interval measured against the old cap.
+      lastRenderedTimestamp = 0
     },
 
     subscribe(sessionId, listener) {
