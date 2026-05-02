@@ -287,7 +287,7 @@ export function MessageFeedPanel({
                   return (
                     <div
                       key={msg.id}
-                      ref={(el) => measureRef(msg.id, el)}
+                      ref={measureRef(msg.id)}
                       style={{ marginBottom: MESSAGE_GAP }}
                     >
                       <MessageRow

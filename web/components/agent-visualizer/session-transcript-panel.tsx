@@ -148,7 +148,7 @@ export function SessionTranscriptPanel({
                 {visibleItems.map((msg) => (
                   <div
                     key={msg.id}
-                    ref={(el) => itemMeasureRef(msg.id, el)}
+                    ref={itemMeasureRef(msg.id)}
                     style={{
                       marginBottom: TRANSCRIPT_GAP,
                       borderLeft: sessionColor ? `2px solid ${sessionColor.border}` : undefined,

@@ -84,7 +84,7 @@ export function AgentChatPanel({
                 {visibleItems.map((msg) => (
                   <div
                     key={msg.id}
-                    ref={(el) => measureRef(msg.id, el)}
+                    ref={measureRef(msg.id)}
                     style={{ marginBottom: CHAT_GAP }}
                   >
                     <TranscriptMessage message={msg} />
