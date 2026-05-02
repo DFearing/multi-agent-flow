@@ -48,10 +48,12 @@ let SAMPLE_INTERVAL_US = 1000   // 1ms — high enough for long-task attribution
 const args = process.argv.slice(2)
 if (args.includes('--smoke')) { WARMUP_MS = 15_000; MEASURE_MS = 30_000 }
 if (args.includes('--no-throttle')) THROTTLE = 1
+const NO_BLOOM = args.includes('--no-bloom')
 const measureFlag = args.find(a => a.startsWith('--measure='))
 if (measureFlag) MEASURE_MS = parseInt(measureFlag.split('=')[1], 10) * 1000
 const warmupFlag = args.find(a => a.startsWith('--warmup='))
 if (warmupFlag) WARMUP_MS = parseInt(warmupFlag.split('=')[1], 10) * 1000
+const SUFFIX = NO_BLOOM ? '-no-bloom' : ''
 
 const now = () => new Date().toISOString().slice(11, 19)
 const log = (...a) => console.log(`[${now()}]`, ...a)
@@ -317,6 +319,11 @@ async function run() {
   try {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 })
     await ctx.addInitScript({ path: INSTRUMENTATION_PATH })
+    if (NO_BLOOM) {
+      await ctx.addInitScript({
+        content: `try { localStorage.setItem('agent-flow:effects:v1', JSON.stringify({bloom:false,particles:true,bubbles:true,backgroundParticles:true})); } catch {}`,
+      })
+    }
     const page = await ctx.newPage()
     const cdp = await ctx.newCDPSession(page)
 
@@ -378,13 +385,13 @@ async function run() {
     log(`fps=${summary.summary.fpsMean.toFixed(1)} longTasks=${summary.summary.longTasks.count}/${Math.round(summary.summary.longTasks.totalMs)}ms`)
 
     // Write raw cpuprofile (DevTools-loadable) and our parsed report.
-    const cpuPath = path.join(RESULTS_DIR, 'long-tasks-profile.cpuprofile')
+    const cpuPath = path.join(RESULTS_DIR, `long-tasks-profile${SUFFIX}.cpuprofile`)
     fs.writeFileSync(cpuPath, JSON.stringify(profile))
     log(`wrote ${cpuPath} (${(fs.statSync(cpuPath).size / 1e6).toFixed(1)} MB)`)
 
-    const summaryPath = path.join(RESULTS_DIR, 'long-tasks-summary.json')
+    const summaryPath = path.join(RESULTS_DIR, `long-tasks-summary${SUFFIX}.json`)
     fs.writeFileSync(summaryPath, JSON.stringify({
-      meta: { commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS, simCount: SIM_COUNT },
+      meta: { commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS, simCount: SIM_COUNT, bloom: !NO_BLOOM },
       bench: summary.summary,
     }, null, 2))
     log(`wrote ${summaryPath}`)
@@ -394,7 +401,7 @@ async function run() {
     report = writeReport(parsed, summary.longTasks, {
       commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS,
     })
-    const reportPath = path.join(RESULTS_DIR, 'long-tasks-report.md')
+    const reportPath = path.join(RESULTS_DIR, `long-tasks-report${SUFFIX}.md`)
     fs.writeFileSync(reportPath, report)
     log(`wrote ${reportPath}`)
 
