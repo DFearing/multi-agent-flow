@@ -9,11 +9,16 @@ import { useSessionNames } from '@/hooks/use-session-names'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { colorForSession } from '@/lib/colors'
 import { AgentCanvas } from './canvas'
+import { PixiCanvas } from './pixi/pixi-canvas'
 import { ControlBar } from './control-bar'
 import { FloatingPanel } from './floating-panel'
 import { CanvasZoomControl } from './canvas-zoom-control'
 import { useSessionStatsDispatch, type SessionStats } from './session-stats-provider'
 import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
+
+/** Cached once at module load — true when `?renderer=pixi` is present. */
+const USE_PIXI_RENDERER = typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).get('renderer') === 'pixi'
 
 /** Stable empty-events sentinel — keeps the externalEvents prop reference
  *  identical across idle renders so useAgentSimulation's animate callback
@@ -263,26 +268,49 @@ export function SessionCanvasPanel({
     >
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: sessionColor.tint }}>
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-          <AgentCanvas
-            simulationRef={sim.frameRef}
-            sessionId={sessionId}
-            selectedAgentId={selectedAgentId}
-            hoveredAgentId={hoveredAgentId}
-            showStats={showStats}
-            showHexGrid={showHexGrid}
-            zoomToFitTrigger={combinedZoomToFitTrigger}
-            pauseAutoFit={pauseAutoFit}
-            onAgentClick={(id) => onAgentClick(id, sessionId)}
-            onAgentHover={onAgentHover}
-            onAgentDrag={onAgentDrag}
-            onContextMenu={onContextMenu}
-            onToolCallClick={onToolCallClick}
-            selectedToolCallId={selectedToolCallId}
-            onDiscoveryClick={onDiscoveryClick}
-            selectedDiscoveryId={selectedDiscoveryId}
-            showCostOverlay={showCostOverlay}
-            minZoomLevel={minZoomLevel}
-          />
+          {USE_PIXI_RENDERER ? (
+            <PixiCanvas
+              simulationRef={sim.frameRef}
+              sessionId={sessionId}
+              selectedAgentId={selectedAgentId}
+              hoveredAgentId={hoveredAgentId}
+              showStats={showStats}
+              showHexGrid={showHexGrid}
+              zoomToFitTrigger={combinedZoomToFitTrigger}
+              pauseAutoFit={pauseAutoFit}
+              onAgentClick={(id) => onAgentClick(id, sessionId)}
+              onAgentHover={onAgentHover}
+              onAgentDrag={onAgentDrag}
+              onContextMenu={onContextMenu}
+              onToolCallClick={onToolCallClick}
+              selectedToolCallId={selectedToolCallId}
+              onDiscoveryClick={onDiscoveryClick}
+              selectedDiscoveryId={selectedDiscoveryId}
+              showCostOverlay={showCostOverlay}
+              minZoomLevel={minZoomLevel}
+            />
+          ) : (
+            <AgentCanvas
+              simulationRef={sim.frameRef}
+              sessionId={sessionId}
+              selectedAgentId={selectedAgentId}
+              hoveredAgentId={hoveredAgentId}
+              showStats={showStats}
+              showHexGrid={showHexGrid}
+              zoomToFitTrigger={combinedZoomToFitTrigger}
+              pauseAutoFit={pauseAutoFit}
+              onAgentClick={(id) => onAgentClick(id, sessionId)}
+              onAgentHover={onAgentHover}
+              onAgentDrag={onAgentDrag}
+              onContextMenu={onContextMenu}
+              onToolCallClick={onToolCallClick}
+              selectedToolCallId={selectedToolCallId}
+              onDiscoveryClick={onDiscoveryClick}
+              selectedDiscoveryId={selectedDiscoveryId}
+              showCostOverlay={showCostOverlay}
+              minZoomLevel={minZoomLevel}
+            />
+          )}
           <CanvasZoomControl value={minZoomLevel} onChange={setMinZoomLevel} />
         </div>
         <ControlBar
