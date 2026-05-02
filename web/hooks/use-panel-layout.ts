@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect } from 'react'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -580,16 +580,32 @@ export function usePanelLayoutState(): PanelLayoutAPI {
     })
   }, [scheduleSave])
 
-  return {
-    getPanelRect, setPanelRect, bringToFront,
-    resetLayout, saveLayout, hardResetLayout, hasSavedLayout,
-    sendPanelToNext, sendPanelToPrev, tilePanels,
-    registerMounted, unregisterMounted,
-    otherInstances, instanceId: INSTANCE_ID,
-    isFreshInstance: IS_FRESH_INSTANCE,
-    hostId: HOST_ID,
-    hostNotFound,
-    bootedAsAttached,
-    panels,
-  }
+  // Memoize the API object so its identity only changes when something
+  // underlying actually changed. The provider feeds this directly into
+  // PanelLayoutContext.Provider, so a fresh object every render would
+  // re-render every usePanelLayout() consumer (every FloatingPanel, every
+  // canvas, the top bar, AgentVisualizerInner) on any unrelated re-render.
+  // Module-level constants (INSTANCE_ID, IS_FRESH_INSTANCE, HOST_ID) are
+  // intentionally omitted from the deps — they're frozen at module load.
+  return useMemo(
+    () => ({
+      getPanelRect, setPanelRect, bringToFront,
+      resetLayout, saveLayout, hardResetLayout, hasSavedLayout,
+      sendPanelToNext, sendPanelToPrev, tilePanels,
+      registerMounted, unregisterMounted,
+      otherInstances, instanceId: INSTANCE_ID,
+      isFreshInstance: IS_FRESH_INSTANCE,
+      hostId: HOST_ID,
+      hostNotFound,
+      bootedAsAttached,
+      panels,
+    }),
+    [
+      getPanelRect, setPanelRect, bringToFront,
+      resetLayout, saveLayout, hardResetLayout, hasSavedLayout,
+      sendPanelToNext, sendPanelToPrev, tilePanels,
+      registerMounted, unregisterMounted,
+      otherInstances, hostNotFound, bootedAsAttached, panels,
+    ],
+  )
 }
