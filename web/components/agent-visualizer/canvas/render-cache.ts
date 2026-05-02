@@ -84,16 +84,29 @@ export function getScanlineSprite(
 
 // ─── Text measurement cache ────────────────────────────────────────────────
 // Caches ctx.measureText().width to avoid redundant browser layout per frame.
+//
+// Eviction: when full, drop the oldest TEXT_CACHE_EVICT_BATCH entries. JS Map
+// preserves insertion order, so iterating .keys() gives FIFO. Previously this
+// did `.clear()` on overflow, which caused periodic stutters in long-running
+// sessions — every truncateText/wrapText call after the clear was a fresh
+// ctx.measureText() (a layout-read that can trigger reflow).
 
 const textWidthCache = new Map<string, number>()
 const TEXT_CACHE_MAX = 2000
+const TEXT_CACHE_EVICT_BATCH = 200
 
 export function measureTextCached(ctx: CanvasRenderingContext2D, text: string): number {
   const key = ctx.font + '|' + text
   let w = textWidthCache.get(key)
   if (w !== undefined) return w
   w = ctx.measureText(text).width
-  if (textWidthCache.size > TEXT_CACHE_MAX) textWidthCache.clear()
+  if (textWidthCache.size >= TEXT_CACHE_MAX) {
+    let dropped = 0
+    for (const oldKey of textWidthCache.keys()) {
+      textWidthCache.delete(oldKey)
+      if (++dropped >= TEXT_CACHE_EVICT_BATCH) break
+    }
+  }
   textWidthCache.set(key, w)
   return w
 }
