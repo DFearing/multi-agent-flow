@@ -304,9 +304,26 @@ function AgentVisualizerInner() {
     }
   }, [bridge.sessions, workspaceFilter])
 
+  // Per-canvas close state. The user can ✕-close a session canvas and we
+  // keep it dismissed across reloads (per-instance, like other UI prefs);
+  // the top bar shows a chip for each closed canvas so it can be reopened.
+  const [hiddenCanvasesList, setHiddenCanvasesList] = usePersistedState<string[]>(
+    `agent-flow:hidden-canvases:v1:${instanceId}`,
+    [],
+  )
+  const hiddenCanvasesSet = useMemo(() => new Set(hiddenCanvasesList), [hiddenCanvasesList])
+  const hideCanvas = useCallback((id: string) => {
+    setHiddenCanvasesList(prev => prev.includes(id) ? prev : [...prev, id])
+  }, [setHiddenCanvasesList])
+  const showCanvas = useCallback((id: string) => {
+    setHiddenCanvasesList(prev => prev.filter(x => x !== id))
+  }, [setHiddenCanvasesList])
+
   const visibleSessions = useMemo(
-    () => bridge.sessions.filter(s => workspaceFilter.isVisible(s.cwd)),
-    [bridge.sessions, workspaceFilter],
+    () => bridge.sessions.filter(s =>
+      workspaceFilter.isVisible(s.cwd) && !hiddenCanvasesSet.has(s.id),
+    ),
+    [bridge.sessions, workspaceFilter, hiddenCanvasesSet],
   )
 
   // Keys are `${sessionId}:${agentId}` to disambiguate same-named agents
@@ -438,6 +455,7 @@ function AgentVisualizerInner() {
             onContextMenu={selection.handleContextMenu}
             onToolCallClick={selection.handleToolCallClick}
             onDiscoveryClick={selection.handleDiscoveryClick}
+            onClose={() => hideCanvas(session.id)}
           />
         )
       })}
@@ -550,6 +568,8 @@ function AgentVisualizerInner() {
         showMessageFeed={showMessageFeed}
         isMuted={isMuted}
         workspaceFilter={workspaceFilter}
+        hiddenCanvases={hiddenCanvasesSet}
+        onShowCanvas={showCanvas}
         onTogglePanel={togglePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}

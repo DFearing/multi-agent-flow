@@ -134,6 +134,10 @@ export interface TopBarProps {
   showMessageFeed: boolean
   isMuted: boolean
   workspaceFilter: WorkspaceFilterAPI
+  /** Session ids whose canvas the user has ✕-closed. The top bar renders a
+   *  chip per id so they can be reopened via onShowCanvas. */
+  hiddenCanvases?: ReadonlySet<string>
+  onShowCanvas?: (sessionId: string) => void
   onTogglePanel: (panel: 'files' | 'transcript' | 'cost' | 'messages') => void
   onToggleTimeline: () => void
   onToggleMute: () => void
@@ -148,6 +152,7 @@ export const TopBar = memo(function TopBar({
   agentCount, totalTokens,
   showFileAttention, showTranscript, showCostOverlay, showTimeline, showMessageFeed, isMuted,
   workspaceFilter,
+  hiddenCanvases, onShowCanvas,
   onTogglePanel, onToggleTimeline, onToggleMute, onUiClick,
 }: TopBarProps) {
   const { resetLayout, saveLayout, hardResetLayout, tilePanels, instanceId, hostId, otherInstances } = usePanelLayout()
@@ -253,6 +258,13 @@ export const TopBar = memo(function TopBar({
             sessions={allSessions}
             onRemoveSession={onRemoveSession}
           />
+          {hiddenCanvases && hiddenCanvases.size > 0 && onShowCanvas && (
+            <ClosedCanvasChips
+              hiddenIds={hiddenCanvases}
+              sessions={allSessions}
+              onShow={onShowCanvas}
+            />
+          )}
           <div className="flex items-center gap-1">
             <ToggleButton
               active={false}
@@ -479,6 +491,62 @@ function WorkspaceFilterButton({
       </div>
       {open && anchorRect && typeof document !== 'undefined' && createPortal(popoverContent, document.body)}
     </>
+  )
+}
+
+// ─── Closed-canvas chips ────────────────────────────────────────────────────
+// Renders one chip per ✕-closed canvas. Click to reopen. Sits next to the
+// workspace filter so reopening hidden things lives in one neighborhood.
+
+function ClosedCanvasChips({
+  hiddenIds,
+  sessions,
+  onShow,
+}: {
+  hiddenIds: ReadonlySet<string>
+  sessions: SessionInfo[]
+  onShow: (sessionId: string) => void
+}) {
+  const items = useMemo(() => {
+    const byId = new Map(sessions.map(s => [s.id, s]))
+    return [...hiddenIds].map(id => ({
+      id,
+      label: byId.get(id)?.label ?? id.slice(0, 8),
+    }))
+  }, [hiddenIds, sessions])
+
+  if (items.length === 0) return null
+
+  return (
+    <div className="flex items-center gap-1 flex-wrap" style={{ maxWidth: 360 }}>
+      {items.map(item => (
+        <button
+          key={item.id}
+          onClick={() => onShow(item.id)}
+          title={`Reopen "${item.label}"`}
+          className="rounded transition-all"
+          style={{
+            padding: '3px 8px',
+            fontSize: 10,
+            fontFamily: "'SF Mono', 'Fira Code', monospace",
+            color: COLORS.textPrimary,
+            background: COLORS.toggleInactive,
+            border: `1px dashed ${COLORS.toggleBorder}`,
+            opacity: 0.85,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            maxWidth: 160,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 11, lineHeight: 1 }}>↩</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
+        </button>
+      ))}
+    </div>
   )
 }
 

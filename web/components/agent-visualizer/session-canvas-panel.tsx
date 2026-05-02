@@ -49,6 +49,9 @@ interface SessionCanvasPanelProps {
   onContextMenu: (e: React.MouseEvent, type: 'agent' | 'edge' | 'canvas', id?: string) => void
   onToolCallClick?: (toolCallId: string | null) => void
   onDiscoveryClick?: (discoveryId: string | null) => void
+  /** ✕-close handler. Parent persists the hidden state and shows a chip
+   *  in the top bar so the canvas can be reopened. */
+  onClose?: () => void
 }
 
 export function SessionCanvasPanel({
@@ -61,6 +64,7 @@ export function SessionCanvasPanel({
   getSessionEventLog,
   onAgentClick, onAgentHover, onAgentDrag,
   onContextMenu, onToolCallClick, onDiscoveryClick,
+  onClose,
 }: SessionCanvasPanelProps) {
   const panelId = `canvas-slot-${slot}` as const
   // Local cursor over the bridge's per-session event log. Slice only when
@@ -238,6 +242,7 @@ export function SessionCanvasPanel({
       title={displayTitle}
       accentColor={sessionColor.accent}
       onTitleEdit={(next) => setName(sessionId, next)}
+      onClose={onClose}
       noContentZoom
     >
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: sessionColor.tint }}>
