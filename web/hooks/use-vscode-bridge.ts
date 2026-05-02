@@ -45,6 +45,15 @@ interface BridgeHookResult {
  * Supports multi-session: events are buffered per-session so switching
  * sessions replays the correct event history.
  */
+/** Drop events received in this many ms after the bridge mounts. The relay
+ *  flushes its full per-session backlog the moment SSE opens, which arrives
+ *  here as a thousand-event burst on first page load and overwhelms the
+ *  canvas. We discard those events outright; the canvas starts clean and
+ *  picks up live activity from then on. Real new events that happen to land
+ *  inside the warmup window are also dropped (acceptable trade-off — the
+ *  next event will appear when it fires). */
+const EVENT_WARMUP_MS = 1500
+
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
@@ -54,6 +63,14 @@ export function useVSCodeBridge(): BridgeHookResult {
   const [disable1MContext, setDisable1MContext] = useState(false)
   const pendingEventsRef = useRef<SimulationEvent[]>([])
   const [, setEventVersion] = useState(0) // trigger re-render on new events
+
+  // Wall-clock timestamp when this hook first mounted; events arriving within
+  // EVENT_WARMUP_MS of this are dropped. Stored in a ref so StrictMode's
+  // double-mount in dev doesn't reset it on the second pass.
+  const mountTimeRef = useRef<number>(0)
+  if (mountTimeRef.current === 0 && typeof window !== 'undefined') {
+    mountTimeRef.current = Date.now()
+  }
 
   // rAF-coalesced bump: at most one re-render per animation frame regardless of event burst rate
   const rafPendingRef = useRef(false)
@@ -118,6 +135,12 @@ export function useVSCodeBridge(): BridgeHookResult {
     // selectedSessionIdRef is updated synchronously (not via React state) so it's
     // always current even before React re-renders.
     const unsubEvent = bridge.onEvent((event: AgentEvent) => {
+      // Drop events arriving inside the post-mount warmup so the relay's
+      // initial backlog flush doesn't slam the canvas with thousands of
+      // events at once. Time is checked here (not at module scope) so the
+      // window is anchored to React mount, not to JS file evaluation.
+      if (Date.now() - mountTimeRef.current < EVENT_WARMUP_MS) return
+
       const simEvent: SimulationEvent = {
         time: event.time,
         type: event.type as SimulationEvent['type'],
