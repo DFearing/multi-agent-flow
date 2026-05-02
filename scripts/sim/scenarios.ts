@@ -182,6 +182,62 @@ const permissionPrompt: Scenario = {
   },
 }
 
+// ─── concurrent (long-running) ──────────────────────────────────────────────
+
+const TASKS = [
+  'Refactor the auth module to use JWT instead of sessions',
+  'Add structured request logging to all routes',
+  'Migrate the queue worker to BullMQ v5',
+  'Replace the in-memory cache with Redis',
+  'Audit dependencies for known CVEs',
+]
+
+const concurrent: Scenario = {
+  name: 'concurrent',
+  description: 'N concurrent sessions that emit events until Ctrl+C — for layout-on-reload testing.',
+  async run(runner) {
+    const count = Number(process.env.SIM_CONCURRENT_COUNT) || 3
+    const sessions = await Promise.all(
+      Array.from({ length: count }, (_, i) => runner.startSession(`Long session ${i + 1}: ${TASKS[i % TASKS.length].slice(0, 32)}…`)),
+    )
+
+    // Per-session loops. Different cadences so the canvases don't all tick
+    // in lockstep — easier to tell which is which while testing.
+    await Promise.all(
+      sessions.map(async (s, i) => {
+        await s.user(TASKS[i % TASKS.length])
+        await s.wait(300 + i * 200)
+        await s.thinking('Planning the approach.')
+
+        let n = 0
+        const baseGap = 1500 + i * 400
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          await s.tool(
+            'Read',
+            { file_path: `src/session-${i + 1}/file-${n}.ts` },
+            `read file-${n} — ${30 + (n % 80)} lines`,
+            { durationMs: 700 + (n % 5) * 150 },
+          )
+          n++
+          if (n % 4 === 0) {
+            await s.text(`Progress: processed ${n} files in session ${i + 1}.`)
+          }
+          if (n % 7 === 0) {
+            await s.tool(
+              'Bash',
+              { command: `npm test -- --filter session-${i + 1}` },
+              `12 passed (${(2 + Math.random() * 4).toFixed(1)}s)`,
+              { durationMs: 1800 },
+            )
+          }
+          await s.wait(baseGap)
+        }
+      }),
+    )
+  },
+}
+
 // ─── registry ───────────────────────────────────────────────────────────────
 
 export const SCENARIOS: Record<string, Scenario> = {
@@ -189,6 +245,7 @@ export const SCENARIOS: Record<string, Scenario> = {
   [toolFailure.name]: toolFailure,
   [subagents.name]: subagents,
   [multiSession.name]: multiSession,
+  [concurrent.name]: concurrent,
   [stress.name]: stress,
   [permissionPrompt.name]: permissionPrompt,
 }
