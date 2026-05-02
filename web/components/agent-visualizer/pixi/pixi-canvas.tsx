@@ -49,6 +49,10 @@ interface CanvasProps {
   showCostOverlay?: boolean
   minZoomLevel?: number
   sessionId?: string
+  /** When true (default), pause the render rAF when the canvas scrolls
+   *  off-screen. The simulation sub-state keeps ticking so stats panels
+   *  still receive fresh data. */
+  pauseWhenOffscreen?: boolean
 }
 
 export function PixiCanvas({
@@ -70,6 +74,7 @@ export function PixiCanvas({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   showCostOverlay,
   minZoomLevel,
+  pauseWhenOffscreen = true,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
@@ -85,6 +90,10 @@ export function PixiCanvas({
   const animRef = useRef<number>(0)
   const timeRef = useRef(0)
   const lastFrameRef = useRef(0)
+
+  // IntersectionObserver visibility gating
+  const visibleRef = useRef(true)
+  const needsCatchUpRef = useRef(false)
 
   // ─── Dimensions (mirrors Canvas2D path) ─────────────────────────────────
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -103,6 +112,30 @@ export function PixiCanvas({
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
+
+  // ─── IntersectionObserver: pause render rAF when off-screen ─────────────
+  useEffect(() => {
+    if (!pauseWhenOffscreen) {
+      visibleRef.current = true
+      return
+    }
+    const el = containerRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const wasVisible = visibleRef.current
+          visibleRef.current = entry.isIntersecting
+          if (!wasVisible && entry.isIntersecting) {
+            needsCatchUpRef.current = true
+          }
+        }
+      },
+      { threshold: 0 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [pauseWhenOffscreen])
 
   // ─── Canvas ref for camera/interaction hooks ────────────────────────────
   // useCanvasCamera and useCanvasInteraction expect a ref to an element for
@@ -275,6 +308,10 @@ export function PixiCanvas({
       const draw = (timestamp: number) => {
         if (destroyed) return
         animRef.current = requestAnimationFrame(draw)
+
+        // Skip rendering when the canvas is off-screen (IntersectionObserver).
+        if (!visibleRef.current && !needsCatchUpRef.current) return
+        needsCatchUpRef.current = false
 
         const dt = lastFrameRef.current
           ? (timestamp - lastFrameRef.current) / 1000

@@ -49,13 +49,17 @@ interface CanvasProps {
    *  prop so callers can pass it without a type error; future per-session
    *  overlays (cost, badges) can read it. */
   sessionId?: string
+  /** When true (default), pause the render rAF when the canvas scrolls
+   *  off-screen. The simulation sub-state keeps ticking so stats panels
+   *  still receive fresh data. */
+  pauseWhenOffscreen?: boolean
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
-  minZoomLevel,
+  minZoomLevel, pauseWhenOffscreen = true,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -78,6 +82,14 @@ export function AgentCanvas({
   const toolStatesARef = useRef<Map<string, string>>(new Map())
   const toolStatesBRef = useRef<Map<string, string>>(new Map())
   const stateMapsUseARef = useRef(true)
+
+  // IntersectionObserver visibility gating — when true, the canvas is in the
+  // viewport and the render rAF should draw. When false, we skip drawing to
+  // save GPU work while the simulation sub-state keeps ticking.
+  const visibleRef = useRef(true)
+  // Flag: when the canvas re-enters the viewport, force one immediate redraw
+  // to catch up with simulation changes that happened while off-screen.
+  const needsCatchUpRef = useRef(false)
 
   // Rate-limited error logging for the draw loop (avoid flooding console)
   const lastDrawErrorRef = useRef(0)
@@ -164,6 +176,30 @@ export function AgentCanvas({
     return () => observer.disconnect()
   }, [])
 
+  // ─── IntersectionObserver: pause render rAF when off-screen ─────────────
+  useEffect(() => {
+    if (!pauseWhenOffscreen) {
+      visibleRef.current = true
+      return
+    }
+    const el = containerRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const wasVisible = visibleRef.current
+          visibleRef.current = entry.isIntersecting
+          if (!wasVisible && entry.isIntersecting) {
+            needsCatchUpRef.current = true
+          }
+        }
+      },
+      { threshold: 0 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [pauseWhenOffscreen])
+
   // ─── Detect state changes → spawn effects ──────────────────────────────
 
   const detectStateChanges = useCallback(() => {
@@ -190,6 +226,11 @@ export function AgentCanvas({
 
   const draw = useCallback((timestamp: number) => {
     animationRef.current = requestAnimationFrame((ts) => drawRef.current(ts))
+
+    // Skip rendering when the canvas is off-screen (IntersectionObserver).
+    // The simulation sub-state keeps ticking via the shared manager.
+    if (!visibleRef.current && !needsCatchUpRef.current) return
+    needsCatchUpRef.current = false
 
     const canvas = mainCanvasRef.current
     if (!canvas) return
