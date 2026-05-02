@@ -12,18 +12,20 @@ import type { Transform } from './use-canvas-camera'
 /**
  * Renderer-agnostic hit-detection adapter.
  *
- * Each function takes world-space (canvas-local) coordinates and returns
- * the id of the hit entity, or null.
+ * Each function receives both coordinate spaces:
+ *   - worldX/worldY: world-space coords (camera transform already undone)
+ *   - stageX/stageY: stage-space coords (pixel coords relative to canvas rect,
+ *     before camera transform is applied)
  *
- * The Canvas2D path supplies functions that iterate agent/tool-call/discovery
- * data structures directly. The Pixi path can supply functions that use
- * Pixi's event system or iterate display-object containers.
+ * The Canvas2D adapter uses world-space (coordinate-math hit-detection).
+ * The Pixi adapter uses stage-space (EventBoundary.hitTest internally applies
+ * the inverse of the world container's transform).
  */
 export interface HitTestAdapter {
-  findAgentAt: (x: number, y: number) => string | null
-  findToolCallAt: (x: number, y: number) => string | null
-  findBubbleAgentAt: (x: number, y: number) => string | null
-  findDiscoveryAt: (x: number, y: number) => string | null
+  findAgentAt: (worldX: number, worldY: number, stageX: number, stageY: number) => string | null
+  findToolCallAt: (worldX: number, worldY: number, stageX: number, stageY: number) => string | null
+  findBubbleAgentAt: (worldX: number, worldY: number, stageX: number, stageY: number) => string | null
+  findDiscoveryAt: (worldX: number, worldY: number, stageX: number, stageY: number) => string | null
 }
 
 interface InteractionCallbacks {
@@ -95,33 +97,44 @@ export function useCanvasInteraction({
   const lastPanPosRef = useRef({ x: 0, y: 0, time: 0 })
   const lastHoveredIdRef = useRef<string | null>(null)
 
+  // ─── Stage-space helper ──────────────────────────────────────────────────
+  // Stage-space = pixel coords relative to the canvas element rect (before
+  // camera transform). Needed by the Pixi hit-test adapter.
+  const screenToStage = useCallback((screenX: number, screenY: number) => {
+    const canvas = mainCanvasRef.current
+    if (!canvas) return { x: 0, y: 0 }
+    const rect = canvas.getBoundingClientRect()
+    return { x: screenX - rect.left, y: screenY - rect.top }
+  }, [mainCanvasRef])
+
   // ─── Hit detection — renderer-agnostic adapter or Canvas2D fallback ─────
 
-  const findAgentAt = useCallback((x: number, y: number): string | null => {
-    if (hitTestAdapter) return hitTestAdapter.findAgentAt(x, y)
-    return findAgentAtPure(x, y, drawPropsRef.current.agents)
+  const findAgentAt = useCallback((worldX: number, worldY: number, stageX: number, stageY: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findAgentAt(worldX, worldY, stageX, stageY)
+    return findAgentAtPure(worldX, worldY, drawPropsRef.current.agents)
   }, [drawPropsRef, hitTestAdapter])
 
-  const findToolCallAt = useCallback((x: number, y: number): string | null => {
-    if (hitTestAdapter) return hitTestAdapter.findToolCallAt(x, y)
-    return findToolCallAtPure(x, y, drawPropsRef.current.toolCalls)
+  const findToolCallAt = useCallback((worldX: number, worldY: number, stageX: number, stageY: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findToolCallAt(worldX, worldY, stageX, stageY)
+    return findToolCallAtPure(worldX, worldY, drawPropsRef.current.toolCalls)
   }, [drawPropsRef, hitTestAdapter])
 
-  const findBubbleAgentAt = useCallback((x: number, y: number): string | null => {
-    if (hitTestAdapter) return hitTestAdapter.findBubbleAgentAt(x, y)
-    return findBubbleAgentAtPure(x, y, drawPropsRef.current.agents, simTimeRef.current)
+  const findBubbleAgentAt = useCallback((worldX: number, worldY: number, stageX: number, stageY: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findBubbleAgentAt(worldX, worldY, stageX, stageY)
+    return findBubbleAgentAtPure(worldX, worldY, drawPropsRef.current.agents, simTimeRef.current)
   }, [drawPropsRef, simTimeRef, hitTestAdapter])
 
-  const findDiscoveryAt = useCallback((x: number, y: number): string | null => {
-    if (hitTestAdapter) return hitTestAdapter.findDiscoveryAt(x, y)
-    return findDiscoveryAtPure(x, y, drawPropsRef.current.discoveries)
+  const findDiscoveryAt = useCallback((worldX: number, worldY: number, stageX: number, stageY: number): string | null => {
+    if (hitTestAdapter) return hitTestAdapter.findDiscoveryAt(worldX, worldY, stageX, stageY)
+    return findDiscoveryAtPure(worldX, worldY, drawPropsRef.current.discoveries)
   }, [drawPropsRef, hitTestAdapter])
 
   // ─── Mouse Handlers ─────────────────────────────────────────────────────
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const pos = screenToCanvas(e.clientX, e.clientY)
-    const agentId = findAgentAt(pos.x, pos.y)
+    const stage = screenToStage(e.clientX, e.clientY)
+    const agentId = findAgentAt(pos.x, pos.y, stage.x, stage.y)
     if (e.button === 0) {
       panVelocityRef.current = { vx: 0, vy: 0, active: false }
       setIsDragging(true)
@@ -132,11 +145,12 @@ export function useCanvasInteraction({
         lastPanPosRef.current = { x: e.clientX, y: e.clientY, time: performance.now() }
       }
     }
-  }, [screenToCanvas, findAgentAt, panVelocityRef])
+  }, [screenToCanvas, screenToStage, findAgentAt, panVelocityRef])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = screenToCanvas(e.clientX, e.clientY)
-    const hoveredId = findAgentAt(pos.x, pos.y)
+    const stage = screenToStage(e.clientX, e.clientY)
+    const hoveredId = findAgentAt(pos.x, pos.y, stage.x, stage.y)
     if (hoveredId !== lastHoveredIdRef.current) {
       lastHoveredIdRef.current = hoveredId
       drawPropsRef.current.onAgentHover(hoveredId)
@@ -166,7 +180,7 @@ export function useCanvasInteraction({
         }
       }
     }
-  }, [screenToCanvas, findAgentAt, drawPropsRef, userHasNavigatedRef, transformRef, panVelocityRef])
+  }, [screenToCanvas, screenToStage, findAgentAt, drawPropsRef, userHasNavigatedRef, transformRef, panVelocityRef])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 2) {
@@ -186,20 +200,21 @@ export function useCanvasInteraction({
       : 0
     if (screenDist < ANIM.dragThresholdPx) {
       const pos = screenToCanvas(e.clientX, e.clientY)
-      const agentId = findAgentAt(pos.x, pos.y)
+      const stage = screenToStage(e.clientX, e.clientY)
+      const agentId = findAgentAt(pos.x, pos.y, stage.x, stage.y)
       const p = drawPropsRef.current
       if (agentId) {
         p.onAgentClick(agentId)
       } else {
-        const bubbleAgentId = findBubbleAgentAt(pos.x, pos.y)
+        const bubbleAgentId = findBubbleAgentAt(pos.x, pos.y, stage.x, stage.y)
         if (bubbleAgentId) {
           p.onAgentClick(bubbleAgentId)
         } else {
-          const toolId = findToolCallAt(pos.x, pos.y)
+          const toolId = findToolCallAt(pos.x, pos.y, stage.x, stage.y)
           if (toolId) {
             p.onToolCallClick?.(toolId)
           } else {
-            const discId = findDiscoveryAt(pos.x, pos.y)
+            const discId = findDiscoveryAt(pos.x, pos.y, stage.x, stage.y)
             if (discId) {
               p.onDiscoveryClick?.(discId)
             } else {
@@ -217,7 +232,7 @@ export function useCanvasInteraction({
     }
     setIsDragging(false)
     dragTargetRef.current = null
-  }, [screenToCanvas, findAgentAt, findBubbleAgentAt, findToolCallAt, findDiscoveryAt, drawPropsRef, panVelocityRef])
+  }, [screenToCanvas, screenToStage, findAgentAt, findBubbleAgentAt, findToolCallAt, findDiscoveryAt, drawPropsRef, panVelocityRef])
 
   // Wheel handler attached as native event (passive: false) to allow preventDefault
   const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {})
@@ -250,7 +265,8 @@ export function useCanvasInteraction({
     // Double-click on an agent → consumer-defined behavior (rename inline).
     // Double-click on empty space → zoom-to-fit.
     const pos = screenToCanvas(e.clientX, e.clientY)
-    const agentId = findAgentAt(pos.x, pos.y)
+    const stage = screenToStage(e.clientX, e.clientY)
+    const agentId = findAgentAt(pos.x, pos.y, stage.x, stage.y)
     const onAgentDoubleClick = drawPropsRef.current.onAgentDoubleClick
     if (agentId && onAgentDoubleClick) {
       const canvas = mainCanvasRef.current
@@ -263,14 +279,15 @@ export function useCanvasInteraction({
       return
     }
     doZoomToFit()
-  }, [screenToCanvas, findAgentAt, drawPropsRef, doZoomToFit, mainCanvasRef])
+  }, [screenToCanvas, screenToStage, findAgentAt, drawPropsRef, doZoomToFit, mainCanvasRef])
 
   const handleContextMenuEvent = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     const pos = screenToCanvas(e.clientX, e.clientY)
-    const agentId = findAgentAt(pos.x, pos.y)
+    const stage = screenToStage(e.clientX, e.clientY)
+    const agentId = findAgentAt(pos.x, pos.y, stage.x, stage.y)
     drawPropsRef.current.onContextMenu(e, agentId ? 'agent' : 'canvas', agentId ?? undefined)
-  }, [screenToCanvas, findAgentAt, drawPropsRef])
+  }, [screenToCanvas, screenToStage, findAgentAt, drawPropsRef])
 
   const handleMouseLeave = useCallback(() => {
     setIsDragging(false)

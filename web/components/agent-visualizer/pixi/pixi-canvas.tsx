@@ -196,7 +196,7 @@ export function PixiCanvas({
   // ─── Hit-detection adapter (Pixi path) ──────────────────────────────────
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const hitTestAdapter = useMemo(
-    () => createPixiHitTestAdapter(drawPropsRef, simTimeRef, boundaryRef),
+    () => createPixiHitTestAdapter(boundaryRef),
     [],
   )
 

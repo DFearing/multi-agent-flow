@@ -17,9 +17,9 @@
  * rather than the global `document`. This ensures minimizing the secondary
  * window correctly pauses rendering in that window.
  *
- * Trade-off: ownerDocument is read once at effect time. If the container
- * element is re-parented to a different document, the effect must re-bind
- * (handled via the dependency array including containerRef.current).
+ * Trade-off: ownerDocument is read once at mount time. Re-parenting the
+ * container element to a different document at runtime is not supported —
+ * the hook would need to be remounted (e.g. via a key change) to rebind.
  */
 
 import { useEffect, useRef, type MutableRefObject, type RefObject } from 'react'

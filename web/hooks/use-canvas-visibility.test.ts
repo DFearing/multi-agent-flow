@@ -78,6 +78,102 @@ function fireIO(intersecting: boolean) {
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
+describe('useCanvasVisibility — cross-window ownerDocument', () => {
+  it('attaches visibility listener to ownerDocument, not global document', () => {
+    // Create a secondary document (simulates a detached/pop-out window)
+    const secondaryDoc = document.implementation.createHTMLDocument('test')
+    // jsdom creates docs with visibilityState='prerender'; override to 'visible'
+    Object.defineProperty(secondaryDoc, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    })
+
+    // Create element in the secondary document
+    const el = secondaryDoc.createElement('div')
+    secondaryDoc.body.appendChild(el)
+    const containerRef = { current: el }
+
+    // Spy on the secondary document's addEventListener
+    const addSpy = vi.spyOn(secondaryDoc, 'addEventListener')
+
+    const { result } = renderHook(() => useCanvasVisibility(containerRef, true))
+
+    // Verify listener was attached to the secondary document
+    expect(addSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+
+    // Verify initial state is visible
+    expect(result.current.visibleRef.current).toBe(true)
+
+    addSpy.mockRestore()
+  })
+
+  it('responds to visibilitychange on ownerDocument, not global document', () => {
+    const secondaryDoc = document.implementation.createHTMLDocument('test')
+    Object.defineProperty(secondaryDoc, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    })
+    const el = secondaryDoc.createElement('div')
+    secondaryDoc.body.appendChild(el)
+    const containerRef = { current: el }
+
+    const { result } = renderHook(() => useCanvasVisibility(containerRef, true))
+
+    // Initially visible
+    expect(result.current.visibleRef.current).toBe(true)
+
+    // Simulate the secondary document going hidden
+    Object.defineProperty(secondaryDoc, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    })
+    act(() => {
+      secondaryDoc.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(result.current.visibleRef.current).toBe(false)
+
+    // Dispatching visibilitychange on the GLOBAL document should NOT affect this hook
+    // (global document is still 'visible')
+    result.current.needsCatchUpRef.current = false
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    // Should still be false — the hook listens to secondaryDoc, not global doc
+    expect(result.current.visibleRef.current).toBe(false)
+
+    // Bring the secondary doc back to visible
+    Object.defineProperty(secondaryDoc, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    })
+    act(() => {
+      secondaryDoc.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(result.current.visibleRef.current).toBe(true)
+    expect(result.current.needsCatchUpRef.current).toBe(true)
+  })
+
+  it('global document visibility has no effect when element is in secondary document', () => {
+    const secondaryDoc = document.implementation.createHTMLDocument('test')
+    Object.defineProperty(secondaryDoc, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    })
+    const el = secondaryDoc.createElement('div')
+    secondaryDoc.body.appendChild(el)
+    const containerRef = { current: el }
+
+    const { result } = renderHook(() => useCanvasVisibility(containerRef, true))
+
+    // Make global document hidden
+    setDocVisibility('hidden')
+    act(() => { fireVisibilityChange() })
+
+    // Hook should still be visible (it's watching secondaryDoc, not global doc)
+    expect(result.current.visibleRef.current).toBe(true)
+  })
+})
+
 describe('useCanvasVisibility', () => {
   it('IO visible + doc visible → visibleRef is true', () => {
     const containerRef = makeContainerRef()

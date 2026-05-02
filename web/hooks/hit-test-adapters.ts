@@ -21,6 +21,8 @@ import type { HitTestAdapter } from './use-canvas-interaction'
  * Build a Canvas2D hit-test adapter that reads simulation data from a ref
  * and performs coordinate-math hit-detection against agent positions,
  * tool-call card bounds, bubble rects, and discovery card bounds.
+ *
+ * Uses world-space coords (camera transform already undone).
  */
 export function createCanvas2DHitTestAdapter(
   drawPropsRef: MutableRefObject<{
@@ -31,10 +33,10 @@ export function createCanvas2DHitTestAdapter(
   simTimeRef: MutableRefObject<number>,
 ): HitTestAdapter {
   return {
-    findAgentAt: (x, y) => findAgentAt(x, y, drawPropsRef.current.agents),
-    findToolCallAt: (x, y) => findToolCallAt(x, y, drawPropsRef.current.toolCalls),
-    findBubbleAgentAt: (x, y) => findBubbleAgentAt(x, y, drawPropsRef.current.agents, simTimeRef.current),
-    findDiscoveryAt: (x, y) => findDiscoveryAt(x, y, drawPropsRef.current.discoveries),
+    findAgentAt: (worldX, worldY) => findAgentAt(worldX, worldY, drawPropsRef.current.agents),
+    findToolCallAt: (worldX, worldY) => findToolCallAt(worldX, worldY, drawPropsRef.current.toolCalls),
+    findBubbleAgentAt: (worldX, worldY) => findBubbleAgentAt(worldX, worldY, drawPropsRef.current.agents, simTimeRef.current),
+    findDiscoveryAt: (worldX, worldY) => findDiscoveryAt(worldX, worldY, drawPropsRef.current.discoveries),
   }
 }
 
@@ -63,34 +65,33 @@ function findLabelWithPrefix(
  * per-pixel accuracy against the viewport's world container. The boundary
  * ref is populated by pixi-canvas.tsx after registerViewport + world setup.
  *
+ * Uses stage-space coords (pixel coords relative to the canvas rect, before
+ * camera transform). EventBoundary.hitTest() internally applies the inverse
+ * of the root container's worldTransform, which cancels the camera pan/zoom
+ * and tests children in their natural world positions.
+ *
  * When the boundaryRef is null (boundary not yet created), all methods
  * return null — the next frame's adapter call will succeed once boot
  * completes.
  */
 export function createPixiHitTestAdapter(
-  _drawPropsRef: MutableRefObject<{
-    agents: Map<string, Agent>
-    toolCalls: Map<string, ToolCallNode>
-    discoveries: Discovery[]
-  }>,
-  _simTimeRef: MutableRefObject<number>,
   boundaryRef: MutableRefObject<EventBoundary | null>,
 ): HitTestAdapter {
   return {
-    findAgentAt: (x, y) => {
-      const hit = boundaryRef.current?.hitTest(x, y) as Container | null ?? null
+    findAgentAt: (_worldX, _worldY, stageX, stageY) => {
+      const hit = boundaryRef.current?.hitTest(stageX, stageY) as Container | null ?? null
       return findLabelWithPrefix(hit, 'agent-')
     },
-    findToolCallAt: (x, y) => {
-      const hit = boundaryRef.current?.hitTest(x, y) as Container | null ?? null
+    findToolCallAt: (_worldX, _worldY, stageX, stageY) => {
+      const hit = boundaryRef.current?.hitTest(stageX, stageY) as Container | null ?? null
       return findLabelWithPrefix(hit, 'tool-')
     },
-    findBubbleAgentAt: (x, y) => {
-      const hit = boundaryRef.current?.hitTest(x, y) as Container | null ?? null
+    findBubbleAgentAt: (_worldX, _worldY, stageX, stageY) => {
+      const hit = boundaryRef.current?.hitTest(stageX, stageY) as Container | null ?? null
       return findLabelWithPrefix(hit, 'bubble-')
     },
-    findDiscoveryAt: (x, y) => {
-      const hit = boundaryRef.current?.hitTest(x, y) as Container | null ?? null
+    findDiscoveryAt: (_worldX, _worldY, stageX, stageY) => {
+      const hit = boundaryRef.current?.hitTest(stageX, stageY) as Container | null ?? null
       return findLabelWithPrefix(hit, 'discovery-')
     },
   }
