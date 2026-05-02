@@ -27,6 +27,12 @@ interface CameraOptions {
   agentCount: number
   zoomToFitTrigger?: number
   selectedAgentId: string | null
+  /** Floor for the auto-fit scale. When > 0, the camera will not zoom
+   *  out below this value even if the bounding box of all agents/tools
+   *  doesn't fit — agents at the edges will simply pan out of view as
+   *  the focus agent stays centered. Manual wheel zoom is unaffected.
+   *  0 (default) = no minimum, current behavior. */
+  minZoomLevel?: number
 }
 
 export function useCanvasCamera({
@@ -37,7 +43,10 @@ export function useCanvasCamera({
   agentCount,
   zoomToFitTrigger,
   selectedAgentId,
+  minZoomLevel = 0,
 }: CameraOptions) {
+  const minZoomRef = useRef(minZoomLevel)
+  minZoomRef.current = minZoomLevel
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const userHasNavigatedRef = useRef(false)
   const targetTransformRef = useRef<Transform | null>(null)
@@ -50,8 +59,9 @@ export function useCanvasCamera({
     toolCalls: Map<string, ToolCallNode> | null
     discoveries: Discovery[] | null
     selectedAgentId: string | null
+    minZoom: number
     result: Transform | null
-  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, result: null })
+  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, minZoom: 0, result: null })
 
   // Initialize transform centered on first agents
   useEffect(() => {
@@ -86,7 +96,8 @@ export function useCanvasCamera({
     if (cache.agents === agents
       && cache.toolCalls === toolCalls
       && cache.discoveries === discoveries
-      && cache.selectedAgentId === selectedAgentId) {
+      && cache.selectedAgentId === selectedAgentId
+      && cache.minZoom === minZoomRef.current) {
       return cache.result
     }
 
@@ -143,13 +154,19 @@ export function useCanvasCamera({
       }
     }
     if (minX === Infinity) {
-      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result: null }
+      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, minZoom: minZoomRef.current, result: null }
       return null
     }
     const padding = ANIM.viewportPadding
     const boundsW = maxX - minX + padding * 2
     const boundsH = maxY - minY + padding * 2
-    const scale = Math.min(dimensions.width / boundsW, dimensions.height / boundsH, 2)
+    let scale = Math.min(dimensions.width / boundsW, dimensions.height / boundsH, 2)
+    // Floor at the user's minimum zoom — auto-fit can't shrink the view
+    // below this, so the canvas stays readable even when many agents are
+    // spread out. The focus-agent centering logic below keeps the active
+    // agent on-screen; siblings may pan off the edges.
+    const minZoom = minZoomRef.current
+    if (minZoom > 0 && scale < minZoom) scale = minZoom
 
     // Center the camera on the agent itself (main agent if present, otherwise
     // any agent), instead of the bounding-box center. Keeps the node anchored
@@ -173,7 +190,7 @@ export function useCanvasCamera({
       y: dimensions.height / 2 - anchorY * scale,
       scale,
     }
-    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result }
+    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, minZoom: minZoomRef.current, result }
     return result
   }, [getDescendantIds, drawPropsRef, simTimeRef])
 

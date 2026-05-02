@@ -304,6 +304,14 @@ function AgentVisualizerInner() {
     }
   }, [bridge.sessions, workspaceFilter])
 
+  // Auto-fit zoom floor — 0 = no min (current behavior). The top bar exposes
+  // a small slider; canvases respect this in their auto-fit calculation so
+  // crowded scenes stay readable instead of zooming all the way out.
+  const [minZoomLevel, setMinZoomLevel] = usePersistedState<number>(
+    `agent-flow:min-zoom:v1:${instanceId}`,
+    0,
+  )
+
   // Per-canvas close state. The user can ✕-close a session canvas and we
   // keep it dismissed across reloads (per-instance, like other UI prefs);
   // the top bar shows a chip for each closed canvas so it can be reopened.
@@ -456,6 +464,7 @@ function AgentVisualizerInner() {
             onToolCallClick={selection.handleToolCallClick}
             onDiscoveryClick={selection.handleDiscoveryClick}
             onClose={() => hideCanvas(session.id)}
+            minZoomLevel={minZoomLevel}
           />
         )
       })}
@@ -574,6 +583,8 @@ function AgentVisualizerInner() {
         workspaceFilter={workspaceFilter}
         hiddenCanvases={hiddenCanvasesSet}
         onShowCanvas={showCanvas}
+        minZoomLevel={minZoomLevel}
+        onMinZoomLevelChange={setMinZoomLevel}
         onTogglePanel={togglePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}

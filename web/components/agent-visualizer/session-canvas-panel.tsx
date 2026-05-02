@@ -52,6 +52,8 @@ interface SessionCanvasPanelProps {
   /** ✕-close handler. Parent persists the hidden state and shows a chip
    *  in the top bar so the canvas can be reopened. */
   onClose?: () => void
+  /** Minimum auto-fit scale, 0 = no minimum. */
+  minZoomLevel?: number
 }
 
 export function SessionCanvasPanel({
@@ -65,6 +67,7 @@ export function SessionCanvasPanel({
   onAgentClick, onAgentHover, onAgentDrag,
   onContextMenu, onToolCallClick, onDiscoveryClick,
   onClose,
+  minZoomLevel,
 }: SessionCanvasPanelProps) {
   const panelId = `canvas-slot-${slot}` as const
   // Local cursor over the bridge's per-session event log. Slice only when
@@ -284,6 +287,7 @@ export function SessionCanvasPanel({
             onDiscoveryClick={onDiscoveryClick}
             selectedDiscoveryId={selectedDiscoveryId}
             showCostOverlay={showCostOverlay}
+            minZoomLevel={minZoomLevel}
           />
         </div>
         <ControlBar

@@ -42,6 +42,9 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  /** Floor for the auto-fit scale. 0 (default) = no minimum. Manual wheel
+   *  zoom is unaffected; this only constrains the auto-fit lerp. */
+  minZoomLevel?: number
   /** Session id this canvas is rendering — currently unused but kept on the
    *  prop so callers can pass it without a type error; future per-session
    *  overlays (cost, badges) can read it. */
@@ -52,6 +55,7 @@ export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
+  minZoomLevel,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -120,6 +124,7 @@ export function AgentCanvas({
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
     agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId,
+    minZoomLevel,
   })
 
   // ─── Interaction ────────────────────────────────────────────────────────
