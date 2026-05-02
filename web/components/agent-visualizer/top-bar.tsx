@@ -368,7 +368,10 @@ function WorkspaceFilterButton({
                   <input
                     type="checkbox"
                     checked={visible}
-                    onChange={() => { /* handled by parent click */ }}
+                    // Toggle here directly so clicking the checkbox itself works.
+                    // stopPropagation prevents the parent row's onClick from
+                    // firing a second toggle that would cancel this one out.
+                    onChange={(e) => setVisibility(cwd, e.target.checked)}
                     onClick={e => e.stopPropagation()}
                     style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
                   />
