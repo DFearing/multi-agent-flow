@@ -52,7 +52,7 @@ interface BridgeHookResult {
  *  picks up live activity from then on. Real new events that happen to land
  *  inside the warmup window are also dropped (acceptable trade-off — the
  *  next event will appear when it fires). */
-const EVENT_WARMUP_MS = 1500
+const EVENT_WARMUP_MS = 500
 
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
