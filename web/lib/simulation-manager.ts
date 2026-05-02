@@ -450,17 +450,9 @@ export function createSimulationManager(): SimulationManager {
   function loop(timestamp: number): void {
     if (!running) return
 
-    const elapsed = timestamp - lastTimestamp
-    if (lastTimestamp && elapsed < ANIM_SPEED.minFrameInterval) {
-      rafId = requestAnimationFrame(loop)
-      return
-    }
-
-    // User-selected frame cap. We compare against the most recently rendered
-    // timestamp (not lastTimestamp, which advances even on skipped frames in
-    // the gate above) so the cap reflects actual emitted frames. We allow a
-    // small slack so a 60 Hz monitor can still hit a 60-fps cap when the rAF
-    // callback fires a hair early.
+    // User-selected frame cap. A small slack lets a 60 Hz monitor still hit
+    // a 60-fps cap when the rAF callback fires a hair early. With cap == 0
+    // (Uncapped) the loop runs at the display refresh rate.
     if (frameCapFps > 0 && lastRenderedTimestamp) {
       const minInterval = 1000 / frameCapFps - 1
       if (timestamp - lastRenderedTimestamp < minInterval) {
