@@ -139,5 +139,12 @@ export function useWorkspaceFilter(): WorkspaceFilterAPI {
     })
   }, [scheduleSave, seen])
 
-  return { knownWorkspaces, isVisible, setVisibility, showAll, isolate, registerCwd }
+  // Memoize the return so its identity only changes when an underlying member
+  // does. Without this, every render of `useAgentSimulation` (≈ every state
+  // commit) would return a fresh object and cascade-invalidate all the memos
+  // in `AgentVisualizerInner` that depend on `workspaceFilter`.
+  return useMemo(
+    () => ({ knownWorkspaces, isVisible, setVisibility, showAll, isolate, registerCwd }),
+    [knownWorkspaces, isVisible, setVisibility, showAll, isolate, registerCwd],
+  )
 }

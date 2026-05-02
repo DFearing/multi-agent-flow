@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 
@@ -321,22 +321,40 @@ export function useVSCodeBridge(): BridgeHookResult {
     vscodeBridge?.openFile(filePath, line)
   }, [])
 
-  return {
-    isVSCode,
-    connectionStatus,
-    pendingEvents: pendingEventsRef.current,
-    consumeEvents,
-    useMockData,
-    disable1MContext,
-    bridgeOpenFile,
-    sessions,
-    selectedSessionId,
-    selectedSessionIdRef,
-    selectSession,
-    flushSessionEvents,
-    getSessionEventCount,
-    sessionsWithActivity,
-    removeSession,
-    getSessionEventLog: (sessionId: string) => sessionEventsRef.current.get(sessionId) ?? [],
-  }
+  // Stable: reads through the ref so identity never changes across renders.
+  const getSessionEventLog = useCallback(
+    (sessionId: string) => sessionEventsRef.current.get(sessionId) ?? [],
+    [],
+  )
+
+  // Memoize the return so its identity only churns when one of the underlying
+  // members actually changes. Without this, every render of the consumer
+  // (`AgentVisualizerInner`) would see a fresh `bridge` object and any effect
+  // or memo depending on `bridge` would re-run despite no real change.
+  return useMemo(
+    () => ({
+      isVSCode,
+      connectionStatus,
+      pendingEvents: pendingEventsRef.current,
+      consumeEvents,
+      useMockData,
+      disable1MContext,
+      bridgeOpenFile,
+      sessions,
+      selectedSessionId,
+      selectedSessionIdRef,
+      selectSession,
+      flushSessionEvents,
+      getSessionEventCount,
+      sessionsWithActivity,
+      removeSession,
+      getSessionEventLog,
+    }),
+    [
+      isVSCode, connectionStatus, consumeEvents, useMockData, disable1MContext,
+      bridgeOpenFile, sessions, selectedSessionId, selectedSessionIdRef,
+      selectSession, flushSessionEvents, getSessionEventCount, sessionsWithActivity,
+      removeSession, getSessionEventLog,
+    ],
+  )
 }
