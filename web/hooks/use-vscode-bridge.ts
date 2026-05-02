@@ -45,13 +45,13 @@ interface BridgeHookResult {
  * Supports multi-session: events are buffered per-session so switching
  * sessions replays the correct event history.
  */
-/** Drop events received in this many ms after the bridge mounts. The relay
- *  flushes its full per-session backlog the moment SSE opens, which arrives
- *  here as a thousand-event burst on first page load and overwhelms the
- *  canvas. We discard those events outright; the canvas starts clean and
- *  picks up live activity from then on. Real new events that happen to land
- *  inside the warmup window are also dropped (acceptable trade-off — the
- *  next event will appear when it fires). */
+/** During this window after the bridge mounts, events arriving from the relay
+ *  are still buffered into the per-session logs but the React re-render that
+ *  drives the canvas pipeline is suppressed. Once the window elapses, a
+ *  single bump fires and every per-session simulation processes its entire
+ *  backlog in one frame. Result: all canvases mount together with their
+ *  state caught up, instead of staggering as each session's first new event
+ *  trickles in. */
 const EVENT_WARMUP_MS = 500
 
 export function useVSCodeBridge(): BridgeHookResult {
@@ -121,6 +121,23 @@ export function useVSCodeBridge(): BridgeHookResult {
     }
   }, [])
 
+  // Single deferred flush at warmup end: bumps event version once so every
+  // SessionCanvasPanel re-renders, slices out the buffered events from its
+  // session log, and processes them in one batch. Without this, canvases
+  // would stay blank until a new live event arrived for each session.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const remaining = EVENT_WARMUP_MS - (Date.now() - mountTimeRef.current)
+    if (remaining <= 0) {
+      setEventVersion(v => v + 1)
+      return
+    }
+    const t = setTimeout(() => {
+      setEventVersion(v => v + 1)
+    }, remaining)
+    return () => clearTimeout(t)
+  }, [])
+
   useEffect(() => {
     const bridge = vscodeBridge
     if (!bridge) { return }
@@ -135,11 +152,11 @@ export function useVSCodeBridge(): BridgeHookResult {
     // selectedSessionIdRef is updated synchronously (not via React state) so it's
     // always current even before React re-renders.
     const unsubEvent = bridge.onEvent((event: AgentEvent) => {
-      // Drop events arriving inside the post-mount warmup so the relay's
-      // initial backlog flush doesn't slam the canvas with thousands of
-      // events at once. Time is checked here (not at module scope) so the
-      // window is anchored to React mount, not to JS file evaluation.
-      if (Date.now() - mountTimeRef.current < EVENT_WARMUP_MS) return
+      // Inside the warmup window we still buffer events so the per-session
+      // log stays complete, but suppress the React re-render that pushes
+      // events through to the canvas pipeline. A single bump scheduled
+      // below flushes the whole backlog in one frame at warmup end.
+      const inWarmup = Date.now() - mountTimeRef.current < EVENT_WARMUP_MS
 
       const simEvent: SimulationEvent = {
         time: event.time,
@@ -169,6 +186,11 @@ export function useVSCodeBridge(): BridgeHookResult {
           return next
         })
       }
+      // Skip the per-event re-render bump while warming up — the deferred
+      // flush effect below fires one bump after the window ends and lets
+      // every panel pick up its full backlog in a single render pass.
+      if (inWarmup) return
+
       // Coalesce re-renders: schedule at most one bump per animation frame
       // so burst events (dozens/sec) only trigger a single React re-render per frame.
       if (!rafPendingRef.current) {
