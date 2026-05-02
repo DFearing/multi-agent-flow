@@ -52,6 +52,10 @@ export interface PhysicsNode {
   vy: number
   /** When true the node is immovable (drag-pinned). */
   pinned: boolean
+  /** When true the node is the graph root (e.g. orchestrator) and never
+   *  moves under physics — children orbit it. Distinct from `pinned`, which
+   *  is the transient drag-hold state. */
+  anchor: boolean
 }
 
 export interface PhysicsLink {
@@ -62,6 +66,18 @@ export interface PhysicsLink {
 export interface PhysicsState {
   nodes: Map<string, PhysicsNode>
   links: PhysicsLink[]
+  /** Cached array view of `nodes.values()`, rebuilt by syncPhysics. Avoids
+   *  the per-tick `Array.from()` allocation in the hot loop. */
+  nodeArray: PhysicsNode[]
+  /** id → index in nodeArray. Used by the link-force loop for O(1) endpoint
+   *  lookup instead of O(N) indexOf (issue #20). */
+  nodeIndex: Map<string, number>
+  /** Reusable force/velocity scratch buffers — grown on demand, never shrunk.
+   *  Eliminates per-tick Float64Array allocations in steady state. */
+  fxBuf: Float64Array
+  fyBuf: Float64Array
+  prevVxBuf: Float64Array
+  prevVyBuf: Float64Array
   /** Consecutive frames where max speed < SETTLE_SPEED. */
   settleCount: number
   /** True once settleCount >= SETTLE_FRAMES. */
@@ -71,7 +87,18 @@ export interface PhysicsState {
 // ── Factory ─────────────────────────────────────────────────────────────
 
 export function createPhysicsState(): PhysicsState {
-  return { nodes: new Map(), links: [], settleCount: 0, settled: true }
+  return {
+    nodes: new Map(),
+    links: [],
+    nodeArray: [],
+    nodeIndex: new Map(),
+    fxBuf: new Float64Array(0),
+    fyBuf: new Float64Array(0),
+    prevVxBuf: new Float64Array(0),
+    prevVyBuf: new Float64Array(0),
+    settleCount: 0,
+    settled: true,
+  }
 }
 
 // ── Sync: rebuild node/link sets from simulation agents & edges ─────────
@@ -81,17 +108,19 @@ export function syncPhysics(
   agents: Map<string, Agent>,
   edges: Edge[],
 ): void {
-  // Sync nodes — add new, update pinned status, remove stale.
+  // Sync nodes — add new, update pinned/anchor status, remove stale.
   const liveIds = new Set<string>()
   for (const [id, agent] of agents) {
     liveIds.add(id)
     let node = state.nodes.get(id)
+    const anchor = agent.isMain === true
     if (!node) {
-      node = { id, x: agent.x, y: agent.y, vx: 0, vy: 0, pinned: agent.pinned }
+      node = { id, x: agent.x, y: agent.y, vx: 0, vy: 0, pinned: agent.pinned, anchor }
       state.nodes.set(id, node)
     } else {
       node.pinned = agent.pinned
-      if (node.pinned) {
+      node.anchor = anchor
+      if (node.pinned || node.anchor) {
         node.x = agent.x
         node.y = agent.y
         node.vx = 0
@@ -109,6 +138,27 @@ export function syncPhysics(
   state.links = edges
     .filter(e => e.type === 'parent-child' && nodeIds.has(e.from) && nodeIds.has(e.to))
     .map(e => ({ source: e.from, target: e.to }))
+
+  // Rebuild the node-array cache and id→index map. tickPhysics consumes
+  // these every frame; rebuilding them on the (rare) sync keeps the hot
+  // loop allocation-free and gives the link force O(1) endpoint lookup.
+  state.nodeArray.length = 0
+  state.nodeIndex.clear()
+  let i = 0
+  for (const node of state.nodes.values()) {
+    state.nodeArray.push(node)
+    state.nodeIndex.set(node.id, i++)
+  }
+  // Grow scratch buffers if needed (never shrink — typical session-to-session
+  // node counts hover in a small range, so reallocating costs more than the
+  // memory holds).
+  const n = state.nodeArray.length
+  if (state.fxBuf.length < n) {
+    state.fxBuf = new Float64Array(n)
+    state.fyBuf = new Float64Array(n)
+    state.prevVxBuf = new Float64Array(n)
+    state.prevVyBuf = new Float64Array(n)
+  }
 
   // Wake the solver.
   state.settleCount = 0
@@ -148,8 +198,7 @@ export function pinNode(state: PhysicsState, id: string, x: number, y: number): 
 export function tickPhysics(state: PhysicsState): boolean {
   if (state.settled) return false
 
-  const { nodes, links } = state
-  const nodeArray = Array.from(nodes.values())
+  const { links, nodeArray, nodeIndex } = state
   const n = nodeArray.length
   if (n === 0) {
     state.settled = true
@@ -157,21 +206,19 @@ export function tickPhysics(state: PhysicsState): boolean {
   }
 
   // ── 1. Accumulate forces ─────────────────────────────────────────────
-  // We reuse vx/vy as accumulators: zero them first, accumulate forces,
-  // then integrate. This mirrors d3-force's pattern where velocity is
-  // damped then forces are added as deltas.
-
-  // Store previous velocities for damping.
-  const prevVx = new Float64Array(n)
-  const prevVy = new Float64Array(n)
+  // Reuse the state-level Float64Arrays — zero the force accumulators and
+  // snapshot previous velocities (damping reads vx/vy before any tick
+  // mutation). Steady-state: zero allocations.
+  const fx = state.fxBuf
+  const fy = state.fyBuf
+  const prevVx = state.prevVxBuf
+  const prevVy = state.prevVyBuf
   for (let i = 0; i < n; i++) {
     prevVx[i] = nodeArray[i].vx
     prevVy[i] = nodeArray[i].vy
+    fx[i] = 0
+    fy[i] = 0
   }
-
-  // Reset force accumulators.
-  const fx = new Float64Array(n)
-  const fy = new Float64Array(n)
 
   // ── 1a. All-pairs Coulomb repulsion O(N²) ────────────────────────────
   for (let i = 0; i < n; i++) {
@@ -219,13 +266,18 @@ export function tickPhysics(state: PhysicsState): boolean {
   }
 
   // ── 1c. Spring forces on parent-child links (Hooke) ──────────────────
+  // Match d3-force's bias split: each end of the link receives HALF the
+  // displacement-derived force. Without the split, an asymmetric initial
+  // spawn (one subagent at AGENT_SPAWN_DISTANCE = 200 vs. link rest = 350)
+  // kicks the orchestrator with 2× the force d3 would apply, sending it
+  // flying on the first tick.
+  const LINK_BIAS = 0.5
   for (const link of links) {
-    const src = nodes.get(link.source)
-    const tgt = nodes.get(link.target)
-    if (!src || !tgt) continue
-    const srcIdx = nodeArray.indexOf(src)
-    const tgtIdx = nodeArray.indexOf(tgt)
-    if (srcIdx < 0 || tgtIdx < 0) continue
+    const srcIdx = nodeIndex.get(link.source)
+    const tgtIdx = nodeIndex.get(link.target)
+    if (srcIdx === undefined || tgtIdx === undefined) continue
+    const src = nodeArray[srcIdx]
+    const tgt = nodeArray[tgtIdx]
 
     const dx = tgt.x - src.x
     const dy = tgt.y - src.y
@@ -235,26 +287,24 @@ export function tickPhysics(state: PhysicsState): boolean {
     const force = displacement * LINK_STRENGTH
     const forceX = (dx / dist) * force
     const forceY = (dy / dist) * force
-    fx[srcIdx] += forceX
-    fy[srcIdx] += forceY
-    fx[tgtIdx] -= forceX
-    fy[tgtIdx] -= forceY
-  }
-
-  // ── 1d. Center pull toward (0, 0) ────────────────────────────────────
-  for (let i = 0; i < n; i++) {
-    const node = nodeArray[i]
-    fx[i] -= node.x * CENTER_STRENGTH
-    fy[i] -= node.y * CENTER_STRENGTH
+    fx[srcIdx] += forceX * LINK_BIAS
+    fy[srcIdx] += forceY * LINK_BIAS
+    fx[tgtIdx] -= forceX * LINK_BIAS
+    fy[tgtIdx] -= forceY * LINK_BIAS
   }
 
   // ── 2. Integrate (velocity-Verlet style) ─────────────────────────────
+  // Note: the centroid-recentering force is applied as a position translation
+  // after integration (step 2b), not as a per-node spring during force
+  // accumulation. d3's forceCenter is a pure translation that doesn't fight
+  // the link springs; modeling it as a per-node attractor toward origin
+  // produces underdamped oscillation against link rest-length.
   let maxSpeed = 0
   let anyMoved = false
 
   for (let i = 0; i < n; i++) {
     const node = nodeArray[i]
-    if (node.pinned) continue
+    if (node.pinned || node.anchor) continue
 
     // Damp previous velocity, then add force as acceleration (mass = 1).
     let vx = prevVx[i] * (1 - VELOCITY_DECAY) + fx[i]
@@ -284,8 +334,34 @@ export function tickPhysics(state: PhysicsState): boolean {
     if (speed > maxSpeed) maxSpeed = speed
   }
 
+  // ── 2b. Centroid recentering ─────────────────────────────────────────
+  // Match d3's forceCenter semantics: translate every (unpinned) node by
+  // the same delta so the centroid drifts toward origin. Pure position
+  // translation, no kinetic energy injected. Pinned nodes act as anchors.
+  let cx = 0, cy = 0
+  for (let i = 0; i < n; i++) {
+    cx += nodeArray[i].x
+    cy += nodeArray[i].y
+  }
+  cx /= n
+  cy /= n
+  const tx = -cx * CENTER_STRENGTH
+  const ty = -cy * CENTER_STRENGTH
+  const translationMag = Math.sqrt(tx * tx + ty * ty)
+  if (translationMag > 0) {
+    for (let i = 0; i < n; i++) {
+      if (nodeArray[i].pinned || nodeArray[i].anchor) continue
+      nodeArray[i].x += tx
+      nodeArray[i].y += ty
+    }
+    if (translationMag > 0.1) anyMoved = true
+  }
+
   // ── 3. Settle detection ──────────────────────────────────────────────
-  if (maxSpeed < SETTLE_SPEED) {
+  // Settle gates on max(velocity, centroid-translation-magnitude) so we
+  // don't declare "settled" while the graph is still drifting toward (0,0).
+  const effectiveSpeed = Math.max(maxSpeed, translationMag)
+  if (effectiveSpeed < SETTLE_SPEED) {
     state.settleCount++
     if (state.settleCount >= SETTLE_FRAMES) {
       state.settled = true
