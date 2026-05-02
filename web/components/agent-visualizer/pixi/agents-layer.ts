@@ -22,19 +22,27 @@ import type { Agent } from '@/lib/agent-types'
 import { NODE, ANIM } from '@/lib/agent-types'
 import { AGENT_DRAW, STATS_OVERLAY } from '@/lib/canvas-constants'
 import { getStateColor } from '@/lib/colors'
-import { getHexagonTexture, hexagonPoints, getBrandTexture, BRAND_BAKE_RADIUS } from './pixi-app'
+import { getHexagonTexture, hexagonPoints, getBrandTexture, BRAND_BAKE_RADIUS, getGlowTexture } from './pixi-app'
 import { GlyphAtlas } from './glyph-atlas'
 
 /** Persistent state for one agent's display objects. */
 interface AgentEntry {
   /** Root container for this agent. */
   container: Container
-  /** Hexagon body sprite. */
+  /** Glow halo sprite — radial-gradient texture sized to r+glowPadding. */
+  glow: Sprite
+  /** Last-applied glow cache key (color|radius) so we only swap when needed. */
+  lastGlowKey: string
+  /** Hexagon body sprite — dark `nodeInterior` fill (state color appears in stateRing). */
   body: Sprite
   /** Brand overlay sprite (Claude spark / OpenAI logomark), tinted by state. */
   brand: Sprite
-  /** Last-applied brand cache key (runtime|color) — avoid texture swap when unchanged. */
+  /** Last-applied brand cache key (runtime|color). */
   lastBrandKey: string
+  /** Subtle outer hex ring (color+'25', stroked) at r+outerRingOffset. */
+  outerRing: Graphics
+  /** State ring (hex outline at r in state color, dashed for complete/waiting). */
+  stateRing: Graphics
   /** Selection ring graphics. */
   selectionRing: Graphics
   /** Hover halo graphics. */
@@ -54,6 +62,11 @@ interface AgentEntry {
   /** Agent id. */
   agentId: string
 }
+
+/** Hex color of `COLORS.nodeInterior = rgba(10, 15, 40, 0.5)` — applied as
+ *  body sprite tint with alpha 0.5. */
+const NODE_INTERIOR_TINT = 0x0A0F28
+const NODE_INTERIOR_ALPHA = 0.5
 
 /** Parse a CSS hex color string to a numeric tint value. */
 function parseColor(hex: string): number {
@@ -127,12 +140,49 @@ export class AgentsLayer {
       entry.container.alpha = agent.opacity
       entry.container.visible = agent.opacity > 0.01
 
+      // ── Glow halo ───────────────────────────────────────────────────
+      // Canvas2D drawAgentGlow draws a radial gradient sprite at r+glowPadding,
+      // alpha varying by state. We mirror with getGlowTexture cached by
+      // (color|radius); per-state alpha applied as sprite.alpha.
+      const glowR = radius + AGENT_DRAW.glowPadding
+      const glowRq = Math.ceil(glowR)
+      const glowKey = `${color}|${glowRq}`
+      if (glowKey !== entry.lastGlowKey) {
+        entry.glow.texture = getGlowTexture(color, glowRq)
+        entry.lastGlowKey = glowKey
+      }
+      entry.glow.visible = true
+      entry.glow.alpha = isHovered || isSelected
+        ? 0.35
+        : isWaiting
+          ? 0.3
+          : agent.state === 'thinking'
+            ? 0.2
+            : 0.1
+
       // ── Body ────────────────────────────────────────────────────────
-      // Canvas2D draws the body hex at r*0.9 (drawHexagon at draw-agents.ts:183).
-      // bodyTexture is a 16-radius hex; apply (radius*0.9)/16 scale.
-      const bodyScale = (radius * 0.9) / 16
-      entry.body.scale.set(bodyScale)
-      entry.body.tint = tint
+      // Canvas2D draws the inner hex fill at r with COLORS.nodeInterior — a
+      // dark translucent fill (state color appears in stateRing, not body).
+      // Body tint/alpha set once in createEntry; only scale changes per frame.
+      entry.body.scale.set(radius / 16)
+
+      // ── Outer hex ring ──────────────────────────────────────────────
+      // drawAgentGlow at draw-agents.ts:197 — stroke at r+outerRingOffset
+      // in the state color with alpha 0x25 (~0.145).
+      entry.outerRing.clear()
+      entry.outerRing.poly(hexagonPoints(radius + AGENT_DRAW.outerRingOffset))
+      entry.outerRing.stroke({ width: 1, color: tint, alpha: 0x25 / 0xff })
+
+      // ── State ring (solid for now; dashed-for-waiting/complete pending) ─
+      // drawStateRing at draw-agents.ts:222 — hex stroke at r in the state
+      // color, lineWidth 2 (or 2.5 when selected/hovered).
+      entry.stateRing.clear()
+      entry.stateRing.poly(hexagonPoints(radius))
+      entry.stateRing.stroke({
+        width: (isSelected || isHovered) ? 2.5 : 2,
+        color: tint,
+        alpha: 1,
+      })
 
       // ── Brand overlay (Claude spark / OpenAI logomark) ──────────────
       // Tinted by state color and shadow-blurred at bake time, so the
@@ -256,14 +306,34 @@ export class AgentsLayer {
     container.label = `agent-${agentId}`
     container.eventMode = 'static'
 
-    // Body hexagon
+    // ── Children added in z-order; later additions render on top. ──
+
+    // Glow halo (background, behind body)
+    const glow = new Sprite()
+    glow.anchor.set(0.5)
+    glow.label = 'glow'
+    glow.visible = false
+    container.addChild(glow)
+
+    // Body hexagon (dark nodeInterior; state color shows in stateRing instead)
     const body = new Sprite(this.bodyTexture)
     body.anchor.set(0.5)
+    body.tint = NODE_INTERIOR_TINT
+    body.alpha = NODE_INTERIOR_ALPHA
     body.label = 'body'
     container.addChild(body)
 
-    // Brand overlay (Claude spark / OpenAI logomark) — texture set in update()
-    // because it depends on agent.runtime + state color, both unknown at create.
+    // Outer hex ring at r+outerRingOffset (subtle frame around the body)
+    const outerRing = new Graphics()
+    outerRing.label = 'outer-ring'
+    container.addChild(outerRing)
+
+    // State ring at r (state color, becomes dashed for complete/waiting later)
+    const stateRing = new Graphics()
+    stateRing.label = 'state-ring'
+    container.addChild(stateRing)
+
+    // Brand overlay (Claude spark / OpenAI logomark)
     const brand = new Sprite()
     brand.anchor.set(0.5)
     brand.label = 'brand'
@@ -292,9 +362,13 @@ export class AgentsLayer {
 
     return {
       container,
+      glow,
+      lastGlowKey: '',
       body,
       brand,
       lastBrandKey: '',
+      outerRing,
+      stateRing,
       selectionRing,
       hoverHalo,
       labelSprite: null,

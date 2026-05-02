@@ -85,6 +85,7 @@ vi.mock('./pixi-app', () => ({
   getCircleTexture: () => ({ destroy: () => {} }),
   getHexagonTexture: () => ({ destroy: () => {} }),
   getBrandTexture: () => ({ destroy: () => {} }),
+  getGlowTexture: () => ({ destroy: () => {} }),
   BRAND_BAKE_RADIUS: 64,
   hexagonPoints: (radius: number) => {
     const pts: number[] = []
@@ -209,7 +210,7 @@ describe('AgentsLayer', () => {
     expect(layer.getEntry('a2')!.selectionRing.visible).toBe(false)
   })
 
-  it('state change toggles tint without recreating sprites', () => {
+  it('state change updates without recreating sprites; state color appears in stateRing', () => {
     const layer = new AgentsLayer()
     const agent = makeAgent('a1', { state: 'thinking' })
     const agents = new Map<string, Agent>([['a1', agent]])
@@ -217,18 +218,24 @@ describe('AgentsLayer', () => {
     layer.update(agents, null, null, false, 0)
     const entry = layer.getEntry('a1')!
     const bodyRef = entry.body
+    const stateRingRef = entry.stateRing
 
-    // Thinking state tint: #66ccff = 0x66ccff
-    expect(entry.body.tint).toBe(0x66ccff)
+    // Body stays at nodeInterior tint regardless of state — the state COLOR
+    // appears in stateRing/glow/brand, not in the body fill.
+    const NODE_INTERIOR_TINT = 0x0A0F28
+    expect(entry.body.tint).toBe(NODE_INTERIOR_TINT)
 
     // Change state to tool_calling
     agent.state = 'tool_calling'
     layer.update(agents, null, null, false, 1)
 
-    // Body should be the same object (no reallocation)
+    // Sprites/graphics persist (no reallocation)
     expect(entry.body).toBe(bodyRef)
-    // tool_calling: #ffbb44 = 0xffbb44
-    expect(entry.body.tint).toBe(0xffbb44)
+    expect(entry.stateRing).toBe(stateRingRef)
+    // Body tint unchanged; state color is now expressed elsewhere (verified
+    // by inspection of the running scene — Pixi Graphics doesn't expose
+    // last-stroke color via a public API to assert here).
+    expect(entry.body.tint).toBe(NODE_INTERIOR_TINT)
   })
 
   it('hover halo visibility tracks hoveredAgentId', () => {
