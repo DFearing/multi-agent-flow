@@ -21,13 +21,6 @@ import { snapVisualState } from './simulation/snap-visual-state'
 /** ms between React state updates — canvas uses frameRef for smooth 60fps */
 const UI_THROTTLE_MS = 250
 
-/** When more than this many external events arrive in a single animate frame
- *  (e.g. the bridge's post-warmup backlog flush) we collapse the visual
- *  side-effects via snapVisualState instead of letting every spawn fade in
- *  individually. Tunes the line between "small live burst" and "playback
- *  catch-up". */
-const BATCH_SNAP_THRESHOLD = 20
-
 export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   const { useMockData = true, externalEvents, onExternalEventsConsumed, sessionFilter, sessionFilterRef: externalFilterRef, disable1MContext = false } = options
   const internalFilterRef = useRef(sessionFilter)
@@ -53,11 +46,6 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   const forceSimRef = useRef<Simulation<ForceNode, ForceLink> | null>(null)
   const blockIdCounter = useRef(0)
   const skipForceSyncRef = useRef(false)
-  /** Set false until the simulation has consumed its first non-empty
-   *  externalEvents batch — that very first batch always gets snapped to
-   *  visual-settled state so the post-warmup flush from the bridge doesn't
-   *  trigger a wave of fade-in animations and particle bursts. */
-  const firstBatchSnappedRef = useRef(false)
   const animateRef = useRef<(timestamp: number) => void>(() => {})
   /** Throttle React UI updates to ~4/sec — canvas stays smooth via frameRef */
   const lastUIUpdateRef = useRef(0)
@@ -263,22 +251,6 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
       newTime = Math.max(newTime, currentState.currentTime)
       maxT = Math.max(maxT, newTime)
 
-      // Auto-snap conditions:
-      //   1. The very first non-empty batch this simulation ever sees — the
-      //      bridge defers all warmup-period events into this single render
-      //      so we know it represents accumulated history, not a live tick.
-      //   2. Any subsequent batch larger than BATCH_SNAP_THRESHOLD — covers
-      //      catch-up scenarios after a tab unfocus / reconnect / replay.
-      // Without snapping, every spawned agent fades in from opacity:0 and
-      // every tool call ejects a particle, all stacked in one frame.
-      if (capturedEvents.length > 0) {
-        const isFirstBatch = !firstBatchSnappedRef.current
-        const isLargeBatch = capturedEvents.length > BATCH_SNAP_THRESHOLD
-        if (isFirstBatch || isLargeBatch) {
-          currentState = snapVisualState(currentState, currentState.currentTime)
-        }
-        firstBatchSnappedRef.current = true
-      }
     }
 
     // Append new events to log

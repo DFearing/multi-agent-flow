@@ -45,27 +45,12 @@ interface BridgeHookResult {
  * Supports multi-session: events are buffered per-session so switching
  * sessions replays the correct event history.
  */
-/** Three-phase post-mount event handling.
- *
- *  - 'dropping' (initial): every incoming event is discarded. We're consuming
- *    the relay's backlog of historical state that the user doesn't want to
- *    see materialized on the canvas. End condition: IDLE_FLUSH_MS elapses
- *    without a new event (backlog has finished arriving).
- *
- *  - 'holding': events are buffered into the per-session log but no
- *    re-render is triggered. We give live sessions HOLD_WINDOW_MS to each
- *    emit at least one fresh event, so when we finally release them they
- *    land in a single render pass — every canvas populates together
- *    instead of one-by-one as each session's first post-drop event
- *    happens to arrive.
- *
- *  - 'live': normal — every event triggers a rAF-coalesced re-render.
- *
- *  MAX_WARMUP_MS is the hard cap that forces 'live' even if a flood never
- *  quiets down or no live events arrive during 'holding'. */
+/** Drop the relay's initial backlog so the canvas doesn't get hit with a
+ *  flood of historical events on page load. Each incoming event resets the
+ *  idle timer; once IDLE_FLUSH_MS passes with no new event, we flip to live
+ *  mode. MAX_WARMUP_MS is a hard cap in case the feed never quiets down. */
 const IDLE_FLUSH_MS = 300
-const HOLD_WINDOW_MS = 1500
-const MAX_WARMUP_MS = 3500
+const MAX_WARMUP_MS = 3000
 
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
@@ -77,28 +62,16 @@ export function useVSCodeBridge(): BridgeHookResult {
   const pendingEventsRef = useRef<SimulationEvent[]>([])
   const [, setEventVersion] = useState(0) // trigger re-render on new events
 
-  // Three-phase warmup state machine — see top-of-file comment.
-  const phaseRef = useRef<'dropping' | 'holding' | 'live'>('dropping')
-  const phaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Initial-backlog drop state — see top-of-file comment.
+  const droppingRef = useRef(true)
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hardCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const goLiveRef = useRef(() => {})
-  const goHoldingRef = useRef(() => {})
-
-  goLiveRef.current = () => {
-    if (phaseRef.current === 'live') return
-    phaseRef.current = 'live'
-    if (phaseTimerRef.current) { clearTimeout(phaseTimerRef.current); phaseTimerRef.current = null }
+  const exitDropRef = useRef(() => {})
+  exitDropRef.current = () => {
+    if (!droppingRef.current) return
+    droppingRef.current = false
+    if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null }
     if (hardCapTimerRef.current) { clearTimeout(hardCapTimerRef.current); hardCapTimerRef.current = null }
-    // Bump so all panels re-render and pick up whatever was buffered during
-    // 'holding'. The simulations snap their first non-empty batch.
-    setEventVersion(v => v + 1)
-  }
-  goHoldingRef.current = () => {
-    if (phaseRef.current !== 'dropping') return
-    phaseRef.current = 'holding'
-    if (phaseTimerRef.current) { clearTimeout(phaseTimerRef.current); phaseTimerRef.current = null }
-    phaseTimerRef.current = setTimeout(() => goLiveRef.current(), HOLD_WINDOW_MS)
   }
 
   // rAF-coalesced bump: at most one re-render per animation frame regardless of event burst rate
@@ -150,15 +123,14 @@ export function useVSCodeBridge(): BridgeHookResult {
     }
   }, [])
 
-  // Hard-cap timer — forces 'live' at MAX_WARMUP_MS regardless of phase.
-  // Protects against feeds that never quiet down or sessions that don't
-  // emit during the holding window.
+  // Hard-cap timer — forces live mode at MAX_WARMUP_MS regardless of how
+  // the idle timer is faring. Protects against feeds that never quiet down.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    hardCapTimerRef.current = setTimeout(() => goLiveRef.current(), MAX_WARMUP_MS)
+    hardCapTimerRef.current = setTimeout(() => exitDropRef.current(), MAX_WARMUP_MS)
     return () => {
       if (hardCapTimerRef.current) { clearTimeout(hardCapTimerRef.current); hardCapTimerRef.current = null }
-      if (phaseTimerRef.current) { clearTimeout(phaseTimerRef.current); phaseTimerRef.current = null }
+      if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null }
     }
   }, [])
 
@@ -176,30 +148,12 @@ export function useVSCodeBridge(): BridgeHookResult {
     // selectedSessionIdRef is updated synchronously (not via React state) so it's
     // always current even before React re-renders.
     const unsubEvent = bridge.onEvent((event: AgentEvent) => {
-      const phase = phaseRef.current
-
-      // Phase 1 — drop. Discard the relay's historical backlog. Each event
-      // resets the idle timer; once IDLE_FLUSH_MS passes quietly, the
-      // backlog has finished arriving and we move to the holding phase.
-      if (phase === 'dropping') {
-        if (phaseTimerRef.current) clearTimeout(phaseTimerRef.current)
-        phaseTimerRef.current = setTimeout(() => goHoldingRef.current(), IDLE_FLUSH_MS)
-        // Track session presence even for dropped events so the session list
-        // stays accurate — without this, a session whose entire backlog
-        // lands in this phase would never appear.
-        if (event.sessionId) {
-          if (!sessionEventsRef.current.has(event.sessionId)) {
-            sessionEventsRef.current.set(event.sessionId, [])
-          }
-          if (event.sessionId !== selectedSessionIdRef.current) {
-            setSessionsWithActivity(prev => {
-              if (prev.has(event.sessionId!)) return prev
-              const next = new Set(prev)
-              next.add(event.sessionId!)
-              return next
-            })
-          }
-        }
+      // Drop the relay's initial backlog. Each event resets the idle timer;
+      // once IDLE_FLUSH_MS passes quietly, the backlog has finished arriving
+      // and we exit drop mode for normal live handling.
+      if (droppingRef.current) {
+        if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = setTimeout(() => exitDropRef.current(), IDLE_FLUSH_MS)
         return
       }
 
@@ -232,15 +186,8 @@ export function useVSCodeBridge(): BridgeHookResult {
         })
       }
 
-      // Phase 2 — holding. Buffer the event into the per-session log (done
-      // above) but suppress the re-render so panels don't pick it up yet.
-      // The phase timer fires goLive after HOLD_WINDOW_MS, which bumps once
-      // and lets every panel render its accumulated batch in lockstep.
-      if (phase === 'holding') return
-
-      // Phase 3 — live. Coalesce re-renders: schedule at most one bump per
-      // animation frame so burst events (dozens/sec) only trigger a single
-      // React re-render per frame.
+      // Coalesce re-renders: schedule at most one bump per animation frame
+      // so burst events (dozens/sec) only trigger a single React re-render per frame.
       if (!rafPendingRef.current) {
         rafPendingRef.current = true
         rafIdRef.current = requestAnimationFrame(() => {

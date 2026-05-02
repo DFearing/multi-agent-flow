@@ -260,11 +260,7 @@ export function SessionCanvasPanel({
   // Fresh attach (`?host=<id>` with no `?session=`) starts blank: only show
   // canvas tiles that the host has explicitly sent over via `→`.
   if (bootedAsAttached && !explicitlyVisible) return null
-  // Mount immediately when this session is in the rendering list, even with
-  // zero agents in state — the bridge drops historical events on page load,
-  // so the canvas should appear blank and fill in only as new live events
-  // arrive. (`hadAgentsRef` is still tracked for future re-introduction of
-  // a "hide empty after timeout" behavior if we want it.)
+  if (!hadAgentsRef.current && !explicitlyVisible) return null
 
   return (
     <FloatingPanel
