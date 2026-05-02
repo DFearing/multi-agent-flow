@@ -18,10 +18,11 @@
  */
 
 import { useRef, useEffect, useState, useCallback, useMemo, useId } from 'react'
-import { Container } from 'pixi.js'
+import { Container, EventBoundary } from 'pixi.js'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { useCanvasVisibility } from '@/hooks/use-canvas-visibility'
 import { createPixiHitTestAdapter } from '@/hooks/hit-test-adapters'
 import {
   acquireSharedRenderer,
@@ -31,6 +32,7 @@ import {
   bindViewportCanvas,
   resizeViewport,
   renderViewport,
+  setViewportBoundaryRoot,
   disposeTextureCache,
 } from './pixi-app'
 import type { Viewport } from './pixi-app'
@@ -105,6 +107,7 @@ export function PixiCanvas({
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
   const bloomFilterRef = useRef<PixiBloomFilter | null>(null)
   const worldRef = useRef<Container | null>(null)
+  const boundaryRef = useRef<EventBoundary | null>(null)
   /** Set to true once boot() completes and layers are ready. */
   const readyRef = useRef(false)
   const timeRef = useRef(0)
@@ -113,9 +116,8 @@ export function PixiCanvas({
   // Stable viewport id for this component instance
   const viewportId = useId()
 
-  // IntersectionObserver visibility gating
-  const visibleRef = useRef(true)
-  const needsCatchUpRef = useRef(false)
+  // Visibility gating: IntersectionObserver + document.visibilityState
+  const { visibleRef, needsCatchUpRef } = useCanvasVisibility(containerRef, pauseWhenOffscreen)
 
   // ─── Dimensions (mirrors Canvas2D path) ─────────────────────────────────
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -136,30 +138,6 @@ export function PixiCanvas({
     return () => observer.disconnect()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewportId])
-
-  // ─── IntersectionObserver: pause render rAF when off-screen ─────────────
-  useEffect(() => {
-    if (!pauseWhenOffscreen) {
-      visibleRef.current = true
-      return
-    }
-    const el = containerRef.current
-    if (!el) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const wasVisible = visibleRef.current
-          visibleRef.current = entry.isIntersecting
-          if (!wasVisible && entry.isIntersecting) {
-            needsCatchUpRef.current = true
-          }
-        }
-      },
-      { threshold: 0 },
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [pauseWhenOffscreen])
 
   // ─── Element ref for camera/interaction hooks ───────────────────────────
   // useCanvasCamera and useCanvasInteraction accept RefObject<HTMLElement>.
@@ -218,7 +196,7 @@ export function PixiCanvas({
   // ─── Hit-detection adapter (Pixi path) ──────────────────────────────────
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const hitTestAdapter = useMemo(
-    () => createPixiHitTestAdapter(drawPropsRef, simTimeRef),
+    () => createPixiHitTestAdapter(boundaryRef),
     [],
   )
 
@@ -369,6 +347,10 @@ export function PixiCanvas({
       world.label = 'world'
       viewport.stage.addChild(world)
       worldRef.current = world
+
+      // Set up EventBoundary for per-pixel hit-testing against the world
+      setViewportBoundaryRoot(viewportId, world)
+      boundaryRef.current = viewport.boundary
 
       backgroundLayerRef.current = new BackgroundLayer()
       world.addChild(backgroundLayerRef.current.container)

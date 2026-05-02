@@ -137,6 +137,8 @@ export class BubblesLayer {
           entry = this.pool.free.pop() || this.createEntry()
           this.pool.active.set(key, entry)
           entry.container.visible = true
+          entry.container.label = `bubble-${agent.id}`
+          entry.container.eventMode = 'static'
         }
 
         // ── Position + alpha ────────────────────────────────────────

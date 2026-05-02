@@ -19,6 +19,7 @@ vi.mock('pixi.js', () => {
     y = 0
     alpha = 1
     visible = true
+    eventMode = 'auto'
     addChild(child: unknown) { this.children.push(child) }
     removeChild(child: unknown) {
       const idx = this.children.indexOf(child)
@@ -268,6 +269,18 @@ describe('AgentsLayer', () => {
     layer.update(agents2, null, null, false, 1)
     expect(layer.getEntry('a1')!.container.visible).toBe(true)
     expect(layer.getEntry('a2')!.container.visible).toBe(false)
+  })
+
+  it('created entries have eventMode set to static', () => {
+    const layer = new AgentsLayer()
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1')],
+    ])
+
+    layer.update(agents, null, null, false, 0)
+
+    const entry = layer.getEntry('a1')!
+    expect((entry.container as unknown as { eventMode: string }).eventMode).toBe('static')
   })
 
   it('pulse ring is visible only for thinking agents', () => {
