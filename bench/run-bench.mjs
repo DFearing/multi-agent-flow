@@ -44,11 +44,11 @@ const STACKS = [
   { id: 'A-base',    label: 'Baseline (59ccf4e)',     appPath: `${WORKTREE_ROOT}/baseline-tree/app/dist/app.js` },
   { id: 'B-preperf', label: 'Pre-perf (433ef5a)',     appPath: `${WORKTREE_ROOT}/preperf-tree/app/dist/app.js` },
   { id: 'C-pr1',     label: 'PR 1 head (f5d9976)',    appPath: `${WORKTREE_ROOT}/pr1-tree/app/dist/app.js` },
+  { id: 'D-pr31',    label: 'PR 31 head (df3bd94)',   appPath: `${WORKTREE_ROOT}/pr31-tree/app/dist/app.js` },
 ]
 
 const SIM_CWD = REPO_ROOT                     // sim runs from the main repo (it doesn't exist on baseline)
 const SIM_CMD = ['pnpm', '--silent', 'sim', 'concurrent', '--workspace', BENCH_WS]
-const SIM_ENV = { ...process.env, SIM_CONCURRENT_COUNT: '3' }
 
 const PORT = 7100
 let REPS = 5
@@ -56,6 +56,7 @@ let THROTTLES = [1, 4]
 let WARMUP_MS = 30_000
 let MEASURE_MS = 90_000
 let STACK_FILTER = null  // CLI: --stack A-base — limit to one stack
+let SIM_COUNT = 3        // concurrent sessions in the sim ('concurrent' scenario)
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -109,7 +110,7 @@ function spawnSim() {
   const proc = spawn(SIM_CMD[0], SIM_CMD.slice(1), {
     cwd: SIM_CWD,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: SIM_ENV,
+    env: { ...process.env, SIM_CONCURRENT_COUNT: String(SIM_COUNT) },
   })
   proc.stdout.on('data', d => { /* swallow — verbose by default */ })
   proc.stderr.on('data', d => process.stderr.write(`  sim! ${d}`))
@@ -222,6 +223,7 @@ async function runOnce({ stack, throttle, rep, browser }) {
     stack: stack.id,
     label: stack.label,
     throttle,
+    simCount: SIM_COUNT,
     rep,
     metrics: summary,
     cdp: {
@@ -268,7 +270,10 @@ function writeSummary() {
   const rows = fs.readFileSync(RUNS_PATH, 'utf8')
     .split('\n').filter(Boolean).map(l => JSON.parse(l))
 
-  const groupKey = (r) => `${r.stack}|${r.throttle}`
+  // Backfill missing simCount as 3 (the default before the flag was added).
+  for (const r of rows) if (r.simCount === undefined) r.simCount = 3
+
+  const groupKey = (r) => `${r.stack}|${r.throttle}|${r.simCount}`
   const groups = new Map()
   for (const r of rows) {
     const k = groupKey(r)
@@ -276,10 +281,15 @@ function writeSummary() {
     groups.get(k).push(r)
   }
 
+  // Discover which (throttle, simCount) pairs were measured.
+  const cells = new Set()
+  for (const r of rows) cells.add(`${r.throttle}|${r.simCount}`)
+  const cellList = [...cells].map(c => c.split('|').map(Number)).sort((a, b) => a[1] - b[1] || a[0] - b[0])
+
   const lines = []
   lines.push(`# Agent Flow perf benchmark — ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`)
   lines.push('')
-  lines.push(`Workload: \`concurrent\` scenario (3 sessions × 3 subagents/round, continuous)`)
+  lines.push(`Workload: \`concurrent\` scenario, N concurrent sessions × 3 subagents/round, continuous`)
   lines.push(`Warmup: ${WARMUP_MS/1000}s · Measurement window: ${MEASURE_MS/1000}s · Reps: ${REPS}/cell`)
   lines.push(`Browser: Chromium headless · Viewport: 1440×900`)
   lines.push('')
@@ -300,14 +310,19 @@ function writeSummary() {
     }
   }
 
-  for (const throttle of THROTTLES) {
-    lines.push(`## CPU throttle: ${throttle}×`)
+  for (const [throttle, simCount] of cellList) {
+    lines.push(`## ${simCount} session${simCount === 1 ? '' : 's'} · CPU throttle ${throttle}×`)
+    lines.push('')
+    const note = simCount === 1
+      ? '(both stacks render 1 canvas — apples-to-apples)'
+      : `(baseline shows 1 canvas at a time; PR 1 shows ${simCount}, so PR 1 is doing ${simCount}× the rendering work)`
+    lines.push(note)
     lines.push('')
     lines.push('| stack | n | FPS (sd) | frame p95 ms (sd) | frame p99 ms | longtasks # | longtask total ms | scripting ms | heap peak MB | React commits |')
     lines.push('|---|---|---|---|---|---|---|---|---|---|')
     const present = []
     for (const stack of STACKS) {
-      const s = cellStats(`${stack.id}|${throttle}`)
+      const s = cellStats(`${stack.id}|${throttle}|${simCount}`)
       if (s.n === 0) continue
       present.push(stack.id)
       lines.push(`| ${stack.label} | ${s.n} | ${s.fps.mean.toFixed(1)} (±${s.fps.sd.toFixed(1)}) | ${s.p95.mean.toFixed(1)} (±${s.p95.sd.toFixed(1)}) | ${s.p99.mean.toFixed(1)} | ${s.ltCount.mean.toFixed(1)} | ${Math.round(s.ltTotal.mean)} | ${Math.round(s.script.mean)} | ${s.heap.mean.toFixed(1)} | ${Math.round(s.commits.mean)} |`)
@@ -315,20 +330,23 @@ function writeSummary() {
     lines.push('')
 
     // Only emit deltas for pairs where both sides have data.
-    const A = cellStats(`A-base|${throttle}`)
-    const B = cellStats(`B-preperf|${throttle}`)
-    const C = cellStats(`C-pr1|${throttle}`)
+    const A = cellStats(`A-base|${throttle}|${simCount}`)
+    const B = cellStats(`B-preperf|${throttle}|${simCount}`)
+    const C = cellStats(`C-pr1|${throttle}|${simCount}`)
+    const D = cellStats(`D-pr31|${throttle}|${simCount}`)
     const pct = (n, d) => ((n - d) / d * 100).toFixed(1)
     const deltaLines = []
     if (A.n && B.n) deltaLines.push(`- A → B (cost of new features):  FPS ${pct(B.fps.mean, A.fps.mean)}%, p95 ${pct(B.p95.mean, A.p95.mean)}%, scripting ${pct(B.script.mean, A.script.mean)}%`)
     if (B.n && C.n) deltaLines.push(`- B → C (perf-commit payoff):    FPS ${pct(C.fps.mean, B.fps.mean)}%, p95 ${pct(C.p95.mean, B.p95.mean)}%, scripting ${pct(C.script.mean, B.script.mean)}%`)
-    if (A.n && C.n) deltaLines.push(`- A → C (net, baseline → PR 1):   FPS ${pct(C.fps.mean, A.fps.mean)}%, p95 ${pct(C.p95.mean, A.p95.mean)}%, longtasks ${pct(C.ltTotal.mean, A.ltTotal.mean)}%, scripting ${pct(C.script.mean, A.script.mean)}%`)
+    if (A.n && C.n) deltaLines.push(`- A → C (baseline → PR 1):       FPS ${pct(C.fps.mean, A.fps.mean)}%, p95 ${pct(C.p95.mean, A.p95.mean)}%, longtasks ${pct(C.ltTotal.mean, A.ltTotal.mean)}%, scripting ${pct(C.script.mean, A.script.mean)}%`)
+    if (C.n && D.n) deltaLines.push(`- C → D (PR 1 → PR 31):          FPS ${pct(D.fps.mean, C.fps.mean)}%, p95 ${pct(D.p95.mean, C.p95.mean)}%, longtasks ${pct(D.ltTotal.mean, C.ltTotal.mean)}%, scripting ${pct(D.script.mean, C.script.mean)}%`)
+    if (A.n && D.n) deltaLines.push(`- A → D (baseline → PR 31):      FPS ${pct(D.fps.mean, A.fps.mean)}%, p95 ${pct(D.p95.mean, A.p95.mean)}%, longtasks ${pct(D.ltTotal.mean, A.ltTotal.mean)}%, scripting ${pct(D.script.mean, A.script.mean)}%`)
     if (deltaLines.length) {
-      lines.push(`**Deltas (${throttle}×):**`)
+      lines.push(`**Deltas (${throttle}×, ${simCount} session${simCount === 1 ? '' : 's'}):**`)
       lines.push(...deltaLines)
       lines.push('')
     } else if (present.length === 1) {
-      lines.push(`_(Only ${present[0]} measured at ${throttle}× — re-run with another \`--stack\` to compute deltas.)_`)
+      lines.push(`_(Only ${present[0]} measured here — re-run with another \`--stack\` to compute deltas.)_`)
       lines.push('')
     }
   }
@@ -357,6 +375,7 @@ function parseCliArgs(argv) {
     else if (a.startsWith('--reps=')) REPS = parseInt(a.slice(7), 10)
     else if (a === '--no-throttle') THROTTLES = [1]
     else if (a === '--throttle-only') THROTTLES = [4]
+    else if (a === '--sim-count' && argv[i + 1]) { SIM_COUNT = parseInt(argv[++i], 10) }
   }
   return out
 }

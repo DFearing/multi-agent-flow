@@ -1,2 +1,2 @@
 node_modules/
-results/baseline-run.log
+results/*.log
