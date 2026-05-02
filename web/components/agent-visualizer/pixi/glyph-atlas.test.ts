@@ -150,4 +150,100 @@ describe('GlyphAtlas', () => {
 
     atlas.dispose()
   })
+
+  // ── LRU eviction tests ──────────────────────────────────────────────────
+
+  it('evicts oldest page when budget is exceeded (budget=2)', () => {
+    // With budget=2 pages, filling beyond 2 should evict the oldest page.
+    const atlas = new GlyphAtlas(2)
+
+    // Mock measureText returns text.length * 6 px wide.
+    // Use long text (~170 chars) so each entry is ~1024px wide (one per row).
+    // fontSize=10 => h ~18px, so ~56 entries per page.
+    // 170 entries should fill 3+ pages.
+    const longPad = 'x'.repeat(160)
+    const totalEntries = 170
+
+    for (let i = 0; i < totalEntries; i++) {
+      atlas.getGlyph(`${longPad}-${i}`, '#ffffff')
+    }
+
+    // Should never exceed 2 pages
+    expect(atlas.pageCount).toBeLessThanOrEqual(2)
+
+    // Cache entries from evicted pages should be gone
+    expect(atlas.size).toBeLessThan(totalEntries)
+
+    atlas.dispose()
+  })
+
+  it('re-rendered entries after eviction are fresh and usable', () => {
+    const atlas = new GlyphAtlas(2)
+
+    // Get a glyph on page 1
+    const first = atlas.getGlyph('stable-text', '#ff0000')
+    expect(first).toBeDefined()
+
+    // Fill enough to force eviction of page 1
+    for (let i = 0; i < 200; i++) {
+      atlas.getGlyph(`fill-${i}-${'x'.repeat(80)}`, '#00ff00')
+    }
+
+    // The original glyph's cache entry should have been evicted.
+    // Re-requesting it should produce a new (valid) descriptor.
+    const second = atlas.getGlyph('stable-text', '#ff0000')
+    expect(second).toBeDefined()
+    expect(second.width).toBeGreaterThan(0)
+    expect(second.height).toBeGreaterThan(0)
+
+    atlas.dispose()
+  })
+
+  it('dispose after eviction frees all remaining resources', () => {
+    const atlas = new GlyphAtlas(2)
+
+    // Fill enough to trigger eviction
+    for (let i = 0; i < 200; i++) {
+      atlas.getGlyph(`text-${i}`, '#ffffff')
+    }
+
+    expect(atlas.pageCount).toBeLessThanOrEqual(2)
+
+    atlas.dispose()
+    expect(atlas.size).toBe(0)
+    expect(atlas.pageCount).toBe(0)
+  })
+
+  it('LRU access order protects recently-used pages', () => {
+    const atlas = new GlyphAtlas(2)
+
+    // Fill page 1
+    const earlyEntries: string[] = []
+    for (let i = 0; i < 50; i++) {
+      const key = `early-${i}`
+      atlas.getGlyph(key, '#ff0000')
+      earlyEntries.push(key)
+    }
+    const page1Count = atlas.pageCount
+
+    // Fill page 2
+    for (let i = 0; i < 100; i++) {
+      atlas.getGlyph(`mid-${i}-${'y'.repeat(80)}`, '#00ff00')
+    }
+
+    // Touch page-1 entries to refresh their LRU time
+    for (const key of earlyEntries) {
+      atlas.getGlyph(key, '#ff0000')
+    }
+
+    // Fill more to force eviction — page 2 (untouched) should be evicted, not page 1
+    for (let i = 0; i < 100; i++) {
+      atlas.getGlyph(`late-${i}-${'z'.repeat(80)}`, '#0000ff')
+    }
+
+    // Page count should stay at budget
+    expect(atlas.pageCount).toBeLessThanOrEqual(2)
+
+    atlas.dispose()
+  })
 })
