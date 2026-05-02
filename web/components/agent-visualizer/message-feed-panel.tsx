@@ -17,6 +17,8 @@ interface MessageFeedPanelProps {
   agentToSession?: Map<string, string>
   onAgentClick: (agentId: string | null) => void
   selectedAgentId: string | null
+  visible?: boolean
+  onClose?: () => void
 }
 
 // Only show text messages (assistant, user, thinking) — tool calls visible via agent selection
@@ -55,6 +57,8 @@ export function MessageFeedPanel({
   agentToSession,
   onAgentClick,
   selectedAgentId,
+  visible = true,
+  onClose,
 }: MessageFeedPanelProps) {
   const expanded = true
   const setExpanded = (_: boolean) => {}
@@ -210,6 +214,7 @@ export function MessageFeedPanel({
   const collapsePanel = useCallback(() => setExpanded(false), [])
   useClickOutside(panelRef, collapsePanel)
 
+  if (!visible) return null
   if (!latestMessage && agentsWithMessages.length === 0) return null
 
   // ── Collapsed ──
@@ -226,6 +231,7 @@ export function MessageFeedPanel({
         defaultRect={{ x: 12, y: 72, w: 320, h: 444 }}
         minW={200}
         minH={40}
+        onClose={onClose}
       >
         <div
           className="cursor-pointer transition-all hover:scale-[1.02] px-3 py-2 flex items-center gap-2"
@@ -252,6 +258,7 @@ export function MessageFeedPanel({
       minW={240}
       minH={120}
       title="MESSAGES"
+      onClose={onClose}
     >
       <div
         ref={panelRef}

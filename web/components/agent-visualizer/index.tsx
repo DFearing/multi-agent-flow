@@ -102,6 +102,7 @@ function AgentVisualizerInner() {
   const [showTimeline, setShowTimeline] = useState(false)
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
+  const [showMessageFeed, setShowMessageFeed] = useState(true)
   const [detailCardHidden, setDetailCardHidden] = useState(false)
 
   // When the user selects a different agent, re-show the detail card.
@@ -119,12 +120,14 @@ function AgentVisualizerInner() {
       if (id === 'session-transcript') setShowTranscript(true)
       else if (id === 'file-attention') setShowFileAttention(true)
       else if (id === 'timeline') setShowTimeline(true)
+      else if (id === 'message-feed') setShowMessageFeed(true)
     }
     const onHide = (e: Event) => {
       const id = (e as CustomEvent<{ panelId: string }>).detail.panelId
       if (id === 'session-transcript') setShowTranscript(false)
       else if (id === 'file-attention') setShowFileAttention(false)
       else if (id === 'timeline') setShowTimeline(false)
+      else if (id === 'message-feed') setShowMessageFeed(false)
     }
     window.addEventListener('agent-flow:show-panel', onShow)
     window.addEventListener('agent-flow:hide-panel', onHide)
@@ -135,9 +138,10 @@ function AgentVisualizerInner() {
   }, [])
 
   // Independent panel toggling — each panel can be open simultaneously
-  const togglePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
+  const togglePanel = useCallback((panel: 'files' | 'transcript' | 'cost' | 'messages') => {
     if (panel === 'files') setShowFileAttention(prev => !prev)
     else if (panel === 'transcript') setShowTranscript(prev => !prev)
+    else if (panel === 'messages') setShowMessageFeed(prev => !prev)
     else if (panel === 'cost') setShowCostOverlay(prev => {
       // $Cost button toggles canvas labels AND opens the cost-summary panel.
       // The panel can be closed independently via its ✕ without affecting
@@ -457,6 +461,8 @@ function AgentVisualizerInner() {
         agentToSession={agentToSession}
         onAgentClick={selection.handleAgentClick}
         selectedAgentId={selection.selectedAgentId}
+        visible={showMessageFeed}
+        onClose={() => setShowMessageFeed(false)}
       />
 
       {/* Agent detail card (floating panel) — closeable independently of the chat. */}
@@ -581,6 +587,7 @@ function AgentVisualizerInner() {
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}
         showTimeline={showTimeline}
+        showMessageFeed={showMessageFeed}
         isMuted={isMuted}
         workspaceFilter={workspaceFilter}
         onTogglePanel={togglePanel}

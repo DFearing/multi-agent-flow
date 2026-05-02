@@ -111,9 +111,10 @@ export interface TopBarProps {
   showTranscript: boolean
   showCostOverlay: boolean
   showTimeline: boolean
+  showMessageFeed: boolean
   isMuted: boolean
   workspaceFilter: WorkspaceFilterAPI
-  onTogglePanel: (panel: 'files' | 'transcript' | 'cost') => void
+  onTogglePanel: (panel: 'files' | 'transcript' | 'cost' | 'messages') => void
   onToggleTimeline: () => void
   onToggleMute: () => void
   /** Optional UI feedback sound for top-bar button clicks. */
@@ -125,7 +126,7 @@ export const TopBar = memo(function TopBar({
   onSelectSession, onCloseSession, onRemoveSession,
   isVSCode, connectionStatus,
   agentCount, totalTokens,
-  showFileAttention, showTranscript, showCostOverlay, showTimeline, isMuted,
+  showFileAttention, showTranscript, showCostOverlay, showTimeline, showMessageFeed, isMuted,
   workspaceFilter,
   onTogglePanel, onToggleTimeline, onToggleMute, onUiClick,
 }: TopBarProps) {
@@ -209,6 +210,7 @@ export const TopBar = memo(function TopBar({
             background: COLORS.holoBg03,
             border: `1px solid ${COLORS.holoBorder06}`,
           }}>
+            <ToggleButton active={showMessageFeed} onClick={() => onTogglePanel('messages')} style={{ background: showMessageFeed ? undefined : 'transparent', border: 'none' }}>Messages</ToggleButton>
             <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>Files</ToggleButton>
             <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Chat</ToggleButton>
             <ToggleButton
