@@ -9,10 +9,10 @@ import {
   type TimelineEntry,
 } from '@/lib/agent-types'
 import { MOCK_SCENARIO } from '@/lib/mock-scenario'
-import { TOOL_CARD_W, TOOL_CARD_H, FORCE, TOOL_SLOT, BUBBLE_VISIBLE_S, MODEL_FAMILY_CONTEXT, DEFAULT_CONTEXT_SIZE, FALLBACK_CONTEXT_SIZE, ANIM_SPEED } from '@/lib/canvas-constants'
-import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, type Simulation } from 'd3-force'
+import { TOOL_CARD_W, TOOL_CARD_H, TOOL_SLOT, BUBBLE_VISIBLE_S, MODEL_FAMILY_CONTEXT, DEFAULT_CONTEXT_SIZE, FALLBACK_CONTEXT_SIZE, ANIM_SPEED } from '@/lib/canvas-constants'
 
-import type { SimulationState, ForceNode, ForceLink, UseAgentSimulationOptions } from './simulation/types'
+import type { SimulationState, UseAgentSimulationOptions } from './simulation/types'
+import { createPhysicsState, syncPhysics, pinNode, tickPhysics, applyPhysicsToAgents, type PhysicsState } from './simulation/physics'
 import { createEmptyState, MAX_EVENT_LOG } from './simulation/types'
 import { processEvent, type ProcessEventContext } from './simulation/process-event'
 import { computeNextFrame } from './simulation/animate'
@@ -49,7 +49,7 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
 
   const animationRef = useRef<number>(0)
   const lastTimeRef = useRef<number>(0)
-  const forceSimRef = useRef<Simulation<ForceNode, ForceLink> | null>(null)
+  const physicsRef = useRef<PhysicsState>(createPhysicsState())
   const blockIdCounter = useRef(0)
   const skipForceSyncRef = useRef(false)
   const animateRef = useRef<(timestamp: number) => void>(() => {})
@@ -69,68 +69,14 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     return { ...s, eventLog: s.eventLog.clone() }
   }, [])
 
-  // ─── d3-force simulation ─────────────────────────────────────────────────
-  useEffect(() => {
-    const sim = forceSimulation<ForceNode, ForceLink>([])
-      .force('charge', forceManyBody().strength(FORCE.chargeStrength))
-      .force('center', forceCenter(0, 0).strength(FORCE.centerStrength))
-      .force('collide', forceCollide(FORCE.collideRadius))
-      .force('link', forceLink<ForceNode, ForceLink>([]).id(d => d.id).distance(FORCE.linkDistance).strength(FORCE.linkStrength))
-      .alphaDecay(FORCE.alphaDecay)
-      .velocityDecay(FORCE.velocityDecay)
-      .on('tick', () => {
-        // Force tick only updates positions — write to frameRef, no React render.
-        // Lazy-clone agents: most ticks of a settled-ish layout produce zero
-        // drift > 0.1px, so the Map allocation only happens once we find a node
-        // that actually moved.
-        const prev = frameRef.current
-        let newAgents: Map<string, Agent> | null = null
-        for (const node of sim.nodes()) {
-          const agent = prev.agents.get(node.id)
-          if (!agent || agent.pinned || node.x === undefined || node.y === undefined) continue
-          if (Math.abs(agent.x - node.x) > 0.1 || Math.abs(agent.y - node.y) > 0.1) {
-            if (!newAgents) newAgents = new Map(prev.agents)
-            newAgents.set(node.id, { ...agent, x: node.x, y: node.y })
-          }
-        }
-        if (newAgents) {
-          frameRef.current = { ...prev, agents: newAgents }
-        }
-      })
+  // ─── Physics state (no useEffect needed — stateless ref) ────────────────
 
-    sim.stop()
-    forceSimRef.current = sim
-    return () => { sim.stop(); forceSimRef.current = null }
-  }, [])
-
-  // ─── Force simulation sync ───────────────────────────────────────────────
+  // ─── Physics sync ────────────────────────────────────────────────────────
   const syncForceSimulation = useCallback((agents: Map<string, Agent>, edges: Edge[]) => {
-    const sim = forceSimRef.current
-    if (!sim) return
-
-    const nodes: ForceNode[] = Array.from(agents.values()).map(a => ({
-      id: a.id,
-      x: a.x, y: a.y,
-      vx: a.vx, vy: a.vy,
-      fx: a.pinned ? a.x : undefined,
-      fy: a.pinned ? a.y : undefined,
-    }))
-
-    // Drop links pointing at agents that aren't in this simulation's node set —
-    // d3-force throws "node not found" otherwise. Can happen when a subagent
-    // spawn references a parent (e.g. orchestrator) that hasn't been spawned
-    // in this per-session simulation yet.
-    const nodeIds = new Set(nodes.map(n => n.id))
-    const links: ForceLink[] = edges
-      .filter(e => e.type === 'parent-child' && nodeIds.has(e.from) && nodeIds.has(e.to))
-      .map(e => ({ id: e.id, source: e.from, target: e.to }))
-
-    sim.nodes(nodes)
-    const linkForce = sim.force('link') as ReturnType<typeof forceLink> | undefined
-    if (linkForce) linkForce.links(links)
-    sim.alpha(0.3).restart()
-    for (let i = 0; i < 15; i++) sim.tick()
-    sim.stop()
+    // Rebuild physics nodes/links from current agents and edges.
+    // Instead of the old 15-tick synchronous burst, we just wake the
+    // integrator — it will settle naturally over subsequent frames.
+    syncPhysics(physicsRef.current, agents, edges)
   }, [])
 
   // ─── Tool slot placement ─────────────────────────────────────────────────
@@ -310,22 +256,24 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     // Write to frameRef (canvas reads this every frame)
     frameRef.current = result
 
-    // Coalesced force-sim resync. handlers set forceSyncDirtyRef during event
+    // Coalesced physics resync. Handlers set forceSyncDirtyRef during event
     // processing instead of scheduling N independent setTimeouts; we run one
     // sync per frame against the post-event agents/edges. Big win during burst
     // replay where hundreds of agent_spawns arrive in a single frame.
     if (forceSyncDirtyRef.current) {
       forceSyncDirtyRef.current = false
-      syncForceSimulation(result.agents, result.edges)
+      syncPhysics(physicsRef.current, result.agents, result.edges)
     }
 
-    // Force tick — updates agent positions in frameRef. Skip when the
-    // simulation has settled (alpha < alphaMin); ticking past that point runs
-    // the full force computation for ~zero visible benefit. Drags re-wake the
-    // simulation via updateAgentPosition's alpha bump below.
-    {
-      const fs = forceSimRef.current
-      if (fs && fs.alpha() > fs.alphaMin()) fs.tick()
+    // Physics tick — updates agent positions in frameRef. Skip when the
+    // simulation has settled (velocity below threshold for consecutive frames).
+    // Drags re-wake the solver via updateAgentPosition's pinNode call.
+    if (!physicsRef.current.settled) {
+      tickPhysics(physicsRef.current)
+      const movedAgents = applyPhysicsToAgents(physicsRef.current, frameRef.current.agents)
+      if (movedAgents) {
+        frameRef.current = { ...frameRef.current, agents: movedAgents }
+      }
     }
 
     // Throttle React re-renders — UI updates at ~4/sec, canvas stays smooth via frameRef.
@@ -416,22 +364,17 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   }, [syncForceSimulation, commitState])
 
   const updateAgentPosition = useCallback((agentId: string, x: number, y: number) => {
-    // Drag updates — write to frameRef only (canvas reads it, no React render)
+    // Drag updates — write to frameRef only (canvas reads it, no React render).
+    // Pin the node directly in the physics state (no fx/fy machinery).
     const prev = frameRef.current
     const newAgents = new Map(prev.agents)
     const agent = newAgents.get(agentId)
     if (agent) newAgents.set(agentId, { ...agent, x, y, pinned: true })
     frameRef.current = { ...prev, agents: newAgents }
 
-    if (forceSimRef.current) {
-      const node = forceSimRef.current.nodes().find(n => n.id === agentId)
-      if (node) { node.fx = x; node.fy = y }
-      // Wake the simulation briefly so the next animate-loop tick propagates
-      // the new fx/fy through the link/collide forces. Without this, the
-      // alpha-gated tick stays asleep and connected agents don't follow.
-      const a = forceSimRef.current.alpha()
-      if (a < 0.05) forceSimRef.current.alpha(0.05)
-    }
+    // Update physics node position and wake the solver so connected nodes
+    // respond to the new position.
+    pinNode(physicsRef.current, agentId, x, y)
   }, [])
 
   /** Seek to a specific time — replays events from scratch up to targetTime */

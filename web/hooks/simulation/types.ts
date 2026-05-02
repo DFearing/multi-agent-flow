@@ -8,7 +8,6 @@ import type {
   TimelineEntry,
   SimulationEvent,
 } from '@/lib/agent-types'
-import type { SimulationNodeDatum, SimulationLinkDatum } from 'd3-force'
 import { RingBuffer } from '@/lib/ring-buffer'
 
 export interface SimulationState {
@@ -103,12 +102,20 @@ export const LABEL_LEN_NAME = 40
 export const LABEL_LEN_TASK = 120
 export const LABEL_LEN_BUBBLE = 200
 
-export interface ForceNode extends SimulationNodeDatum {
+export interface ForceNode {
   id: string
+  x?: number
+  y?: number
+  vx?: number
+  vy?: number
+  fx?: number | null | undefined
+  fy?: number | null | undefined
 }
 
-export interface ForceLink extends SimulationLinkDatum<ForceNode> {
+export interface ForceLink {
   id: string
+  source: string | ForceNode
+  target: string | ForceNode
 }
 
 export interface UseAgentSimulationOptions {
