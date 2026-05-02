@@ -142,6 +142,16 @@ export class TranscriptParser {
 
     const session = sessionId ? this.delegate.getSession(sessionId) : undefined
 
+    // Capture cwd on first sighting so the client can group sessions by
+    // project. Real Claude Code transcript entries include a top-level `cwd`
+    // field; sim entries do too.
+    if (session && !session.cwd && typeof parsed.cwd === 'string' && parsed.cwd) {
+      session.cwd = parsed.cwd
+      if (sessionId) {
+        this.delegate.fireSessionLifecycle({ type: 'updated', sessionId, label: session.label })
+      }
+    }
+
     // Extract model from assistant messages (updates tokensMax on the frontend)
     if (session && !session.model && entry.type === 'assistant' && msg.model) {
       session.model = msg.model

@@ -101,15 +101,19 @@ function broadcastEvent(event: AgentEvent) {
 }
 
 function broadcastSessionLifecycle(type: 'started' | 'ended' | 'updated', sessionId: string, label: string) {
+  // Always send the session's current cwd if known — it can be captured after
+  // 'started' fires (transcript parser populates it from the first JSONL
+  // entry), so 'updated' is the canonical place for late-arriving cwd.
+  const cwd = sessions.get(sessionId)?.cwd ?? undefined
   if (type === 'started') {
     broadcast(JSON.stringify({
       type: 'session-started',
-      session: { id: sessionId, label, status: 'active', startTime: Date.now(), lastActivityTime: Date.now() } as SessionInfo,
+      session: { id: sessionId, label, status: 'active', startTime: Date.now(), lastActivityTime: Date.now(), cwd } as SessionInfo,
     }))
   } else if (type === 'ended') {
     broadcast(JSON.stringify({ type: 'session-ended', sessionId }))
   } else if (type === 'updated') {
-    broadcast(JSON.stringify({ type: 'session-updated', sessionId, label }))
+    broadcast(JSON.stringify({ type: 'session-updated', sessionId, label, cwd }))
   }
 }
 
@@ -206,7 +210,7 @@ function watchSession(sessionId: string, filePath: string) {
     spawnedSubagents: new Set(),
     inlineProgressAgents: new Set(),
     subagentsDirWatcher: null, subagentsDir: null,
-    label: defaultLabel, labelSet: false,
+    label: defaultLabel, labelSet: false, cwd: null,
     model: null,
     permissionTimer: null, permissionEmitted: false,
     contextBreakdown: { systemPrompt: SYSTEM_PROMPT_BASE_TOKENS, userMessages: 0, toolResults: 0, reasoning: 0, subagentResults: 0 },
@@ -487,6 +491,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
           id: session.sessionId, label: session.label,
           status: session.sessionCompleted ? 'completed' : 'active',
           startTime: session.sessionStartTime, lastActivityTime: session.lastActivityTime,
+          ...(session.cwd ? { cwd: session.cwd } : {}),
         })
       }
       if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
