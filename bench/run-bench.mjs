@@ -5,7 +5,7 @@
  * Boots three production-built stacks one at a time:
  *   A = upstream baseline (merge-base 59ccf4e)
  *   B = features-but-no-perf (433ef5a, parent of first perf: commit)
- *   C = HEAD (525abe4)
+ *   C = PR 1 head (f5d9976)
  *
  * For each stack: runs N reps × 2 CPU-throttle levels of the `concurrent`
  * sim scenario, records browser-side perf metrics via Playwright + CDP, and
@@ -41,9 +41,9 @@ const SUMMARY_PATH = path.join(RESULTS_DIR, 'summary.md')
 const INSTRUMENTATION_PATH = path.join(BENCH_DIR, 'instrumentation.js')
 
 const STACKS = [
-  { id: 'A-base',    label: 'Baseline (59ccf4e)',  appPath: `${WORKTREE_ROOT}/baseline-tree/app/dist/app.js` },
-  { id: 'B-preperf', label: 'Pre-perf (433ef5a)',  appPath: `${WORKTREE_ROOT}/preperf-tree/app/dist/app.js` },
-  { id: 'C-head',    label: 'HEAD (current)',      appPath: `${REPO_ROOT}/app/dist/app.js` },
+  { id: 'A-base',    label: 'Baseline (59ccf4e)',     appPath: `${WORKTREE_ROOT}/baseline-tree/app/dist/app.js` },
+  { id: 'B-preperf', label: 'Pre-perf (433ef5a)',     appPath: `${WORKTREE_ROOT}/preperf-tree/app/dist/app.js` },
+  { id: 'C-pr1',     label: 'PR 1 head (f5d9976)',    appPath: `${WORKTREE_ROOT}/pr1-tree/app/dist/app.js` },
 ]
 
 const SIM_CWD = REPO_ROOT                     // sim runs from the main repo (it doesn't exist on baseline)
@@ -158,6 +158,26 @@ async function runOnce({ stack, throttle, rep, browser }) {
   // Per-tab CDP throttle. Set after navigate so initial bundle parse is unthrottled
   // — we measure the steady-state, not first paint.
   await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' })
+
+  // PR 1 (and any branch with the workspace filter) defaults previously-unseen
+  // workspaces to HIDDEN. Without this, the bench workspace is filtered out and
+  // we'd be measuring an empty canvas. Click the topbar's "Workspaces (N hidden)"
+  // pill, then "show all" to make the canvas mount before warmup.
+  // Older stacks (e.g. A-base) lack this UI — the locator returns 0, we skip silently.
+  try {
+    const wsButton = page.getByText(/Workspaces \(\d+ hidden\)/).first()
+    await wsButton.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {})
+    if (await wsButton.count() > 0) {
+      await wsButton.click({ timeout: 2_000 })
+      const showAll = page.getByText('show all', { exact: true }).first()
+      await showAll.waitFor({ state: 'visible', timeout: 2_000 })
+      await showAll.click()
+      await page.keyboard.press('Escape') // close popover so it doesn't affect measurement
+      await sleep(500) // let the canvas mount
+    }
+  } catch (e) {
+    log(`    workspace-show-all skipped: ${e.message}`)
+  }
 
   // Warm up — let event buffer fill, layout stabilize.
   await sleep(WARMUP_MS)
@@ -297,12 +317,12 @@ function writeSummary() {
     // Only emit deltas for pairs where both sides have data.
     const A = cellStats(`A-base|${throttle}`)
     const B = cellStats(`B-preperf|${throttle}`)
-    const C = cellStats(`C-head|${throttle}`)
+    const C = cellStats(`C-pr1|${throttle}`)
     const pct = (n, d) => ((n - d) / d * 100).toFixed(1)
     const deltaLines = []
     if (A.n && B.n) deltaLines.push(`- A → B (cost of new features):  FPS ${pct(B.fps.mean, A.fps.mean)}%, p95 ${pct(B.p95.mean, A.p95.mean)}%, scripting ${pct(B.script.mean, A.script.mean)}%`)
     if (B.n && C.n) deltaLines.push(`- B → C (perf-commit payoff):    FPS ${pct(C.fps.mean, B.fps.mean)}%, p95 ${pct(C.p95.mean, B.p95.mean)}%, scripting ${pct(C.script.mean, B.script.mean)}%`)
-    if (A.n && C.n) deltaLines.push(`- A → C (net):                    FPS ${pct(C.fps.mean, A.fps.mean)}%, p95 ${pct(C.p95.mean, A.p95.mean)}%, scripting ${pct(C.script.mean, A.script.mean)}%`)
+    if (A.n && C.n) deltaLines.push(`- A → C (net, baseline → PR 1):   FPS ${pct(C.fps.mean, A.fps.mean)}%, p95 ${pct(C.p95.mean, A.p95.mean)}%, longtasks ${pct(C.ltTotal.mean, A.ltTotal.mean)}%, scripting ${pct(C.script.mean, A.script.mean)}%`)
     if (deltaLines.length) {
       lines.push(`**Deltas (${throttle}×):**`)
       lines.push(...deltaLines)
