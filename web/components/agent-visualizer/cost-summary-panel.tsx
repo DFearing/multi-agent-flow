@@ -5,7 +5,7 @@ import { COLORS } from '@/lib/colors'
 import { formatTokens } from '@/lib/utils'
 import { agentCost } from './canvas/draw-cost'
 import { FloatingPanel } from './floating-panel'
-import { useSessionStats } from './session-stats-provider'
+import { useSessionStatsData } from './session-stats-provider'
 
 interface CostSummaryPanelProps {
   visible: boolean
@@ -13,7 +13,7 @@ interface CostSummaryPanelProps {
 }
 
 export function CostSummaryPanel({ visible, onClose }: CostSummaryPanelProps) {
-  const { perSession } = useSessionStats()
+  const perSession = useSessionStatsData()
 
   const summary = useMemo(() => {
     let totalTokens = 0

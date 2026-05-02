@@ -1,5 +1,6 @@
 'use client'
 
+import { memo } from 'react'
 import { type AgentState } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
 import { formatTokens } from '@/lib/utils'
@@ -20,7 +21,25 @@ interface AgentDetailCardProps {
   onClose: () => void
 }
 
-export function AgentDetailCard({
+function agentDetailCardEqual(
+  prev: AgentDetailCardProps,
+  next: AgentDetailCardProps,
+): boolean {
+  if (prev.onClose !== next.onClose) return false
+  const a = prev.agent
+  const b = next.agent
+  return (
+    a.name === b.name &&
+    a.state === b.state &&
+    a.tokensUsed === b.tokensUsed &&
+    a.tokensMax === b.tokensMax &&
+    a.toolCalls === b.toolCalls &&
+    a.timeAlive === b.timeAlive &&
+    a.currentTool === b.currentTool
+  )
+}
+
+export const AgentDetailCard = memo(function AgentDetailCard({
   agent,
   onClose,
 }: AgentDetailCardProps) {
@@ -83,4 +102,4 @@ export function AgentDetailCard({
       </div>
     </FloatingPanel>
   )
-}
+}, agentDetailCardEqual)

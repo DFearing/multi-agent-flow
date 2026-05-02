@@ -289,11 +289,18 @@ export interface SessionColor {
   border: string
 }
 
+const sessionColorCache = new Map<string, SessionColor>()
+
 export function colorForSession(sessionId: string): SessionColor {
+  const cached = sessionColorCache.get(sessionId)
+  if (cached) return cached
+
   const hue = SESSION_HUES[hashString(sessionId) % SESSION_HUES.length]
-  return {
+  const color: SessionColor = {
     accent: `hsl(${hue} 75% 62%)`,
     tint: `hsla(${hue}, 60%, 50%, 0.04)`,
     border: `hsla(${hue}, 70%, 60%, 0.45)`,
   }
+  sessionColorCache.set(sessionId, color)
+  return color
 }

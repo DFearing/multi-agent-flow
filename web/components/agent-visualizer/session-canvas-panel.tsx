@@ -8,7 +8,7 @@ import { colorForSession } from '@/lib/colors'
 import { AgentCanvas } from './canvas'
 import { ControlBar } from './control-bar'
 import { FloatingPanel } from './floating-panel'
-import { useSessionStats, type SessionStats } from './session-stats-provider'
+import { useSessionStatsDispatch, type SessionStats } from './session-stats-provider'
 import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
 
 /** Stable empty-events sentinel — keeps the externalEvents prop reference
@@ -87,7 +87,7 @@ export function SessionCanvasPanel({
     sim.play()
   }, [sim.play])
 
-  const { setSessionStats, removeSessionStats } = useSessionStats()
+  const { setSessionStats, removeSessionStats } = useSessionStatsDispatch()
 
   // Keep a ref to the latest sim collections so the throttled publisher can
   // read them without re-subscribing. Refs may be assigned during render —

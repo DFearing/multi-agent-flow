@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { FileAttention } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { formatTokens, truncatePath } from '@/lib/utils'
@@ -14,16 +14,21 @@ interface FileAttentionPanelProps {
   onOpenFile?: (filePath: string) => void
 }
 
-export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile }: FileAttentionPanelProps) {
+export const FileAttentionPanel = memo(function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile }: FileAttentionPanelProps) {
   const [defaultRect] = useState(() => {
     if (typeof window === 'undefined') return { x: 800, y: 72, w: 260, h: 588 }
     return { x: window.innerWidth - 260 - 12, y: 72, w: 260, h: window.innerHeight - 92 }
   })
 
-  const files = Array.from(fileAttention.values())
-    .sort((a, b) => b.totalTokens - a.totalTokens)
+  const files = useMemo(
+    () => Array.from(fileAttention.values()).sort((a, b) => b.totalTokens - a.totalTokens),
+    [fileAttention],
+  )
 
-  const maxTokens = Math.max(...files.map(f => f.totalTokens), 1)
+  const maxTokens = useMemo(
+    () => Math.max(...files.map(f => f.totalTokens), 1),
+    [files],
+  )
 
   return (
     <FloatingPanel
@@ -116,4 +121,4 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
       </div>
     </FloatingPanel>
   )
-}
+})

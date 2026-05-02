@@ -6,7 +6,7 @@ import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { SessionCanvasPanel } from "./session-canvas-panel"
-import { SessionStatsProvider, useSessionStats } from "./session-stats-provider"
+import { SessionStatsProvider, useSessionStatsData } from "./session-stats-provider"
 import { CostSummaryPanel } from "./cost-summary-panel"
 import { SessionNamesProvider } from "@/hooks/use-session-names"
 import { useWorkspaceFilter } from "@/hooks/use-workspace-filter"
@@ -23,6 +23,7 @@ import { stopPropagationHandlers } from "./shared-ui"
 import { TIMING, type Agent } from "@/lib/agent-types"
 import type { ConversationMessage } from "@/hooks/simulation/types"
 import { COLORS } from "@/lib/colors"
+import { mergeByTimestamp } from "@/lib/sort-utils"
 
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
@@ -227,12 +228,30 @@ function AgentVisualizerInner() {
   const selectedAgent = selection.selectedAgentId ? agents.get(selection.selectedAgentId) : null
   const selectedConversation = selection.selectedAgentId ? (conversations.get(selection.selectedAgentId) || []) : []
 
-  // Session-wide conversation (all agents merged chronologically)
-  // Only compute when the transcript panel is visible to avoid O(n log n) sort every frame
+  // Session-wide conversation (all agents merged chronologically).
+  // Incremental merge: only sort newly appended messages, then O(N+M) merge
+  // into the cached sorted result to avoid full O(N log N) at every tick.
+  const sessionConvCacheRef = useRef<{
+    counts: Map<string, number>
+    result: ConversationMessage[]
+  }>({ counts: new Map(), result: [] })
+
   const sessionConversation = useMemo(() => {
     if (!showTranscript) return []
-    const all = Array.from(conversations.values()).flat()
-    return all.sort((a, b) => a.timestamp - b.timestamp)
+    const cache = sessionConvCacheRef.current
+    const newItems: ConversationMessage[] = []
+    for (const [agentId, msgs] of conversations) {
+      const prevLen = cache.counts.get(agentId) ?? 0
+      if (msgs.length > prevLen) {
+        for (let i = prevLen; i < msgs.length; i++) newItems.push(msgs[i])
+        cache.counts.set(agentId, msgs.length)
+      }
+    }
+    if (newItems.length > 0) {
+      newItems.sort((a, b) => a.timestamp - b.timestamp)
+      cache.result = mergeByTimestamp(cache.result, newItems)
+    }
+    return cache.result
   }, [conversations, showTranscript])
 
   // Context menu items
@@ -260,6 +279,14 @@ function AgentVisualizerInner() {
     }
   }, [bridge])
 
+  // Hoisted from the SessionCanvasPanel map to avoid inline arrow allocations.
+  // The child already passes (agentId, sessionId) so we can handle both args.
+  const handleCanvasAgentClick = useCallback((id: string | null, sessionId: string) => {
+    if (sessionId !== bridge.selectedSessionId) bridge.selectSession(sessionId)
+    if (selection.selectedAgentId) selection.clearAgent()
+    void id
+  }, [bridge, selection.selectedAgentId, selection.clearAgent])
+
   const openFile = useCallback((filePath: string, line?: number) => {
     bridge.bridgeOpenFile(filePath, line)
   }, [bridge])
@@ -280,27 +307,45 @@ function AgentVisualizerInner() {
 
   // Keys are `${sessionId}:${agentId}` to disambiguate same-named agents
   // (e.g. two "orchestrator"s) across sessions.
-  const { perSession } = useSessionStats()
+  const perSession = useSessionStatsData()
   const visibleSessionIds = useMemo(
     () => new Set(visibleSessions.map(s => s.id)),
     [visibleSessions],
   )
-  const { feedConversations, feedAgents, agentToSession } = useMemo(() => {
+
+  const feedConversations = useMemo(() => {
     const fc = new Map<string, ConversationMessage[]>()
-    const fa = new Map<string, Agent>()
-    const a2s = new Map<string, string>()
     for (const [sid, stats] of perSession) {
       if (!visibleSessionIds.has(sid)) continue
-      for (const [agentId, ag] of stats.agents) {
-        const key = `${sid}:${agentId}`
-        fa.set(key, ag)
-        a2s.set(key, sid)
-      }
       for (const [agentId, msgs] of stats.conversations) {
         fc.set(`${sid}:${agentId}`, msgs)
       }
     }
-    return { feedConversations: fc, feedAgents: fa, agentToSession: a2s }
+    return fc
+  }, [perSession, visibleSessionIds])
+
+  const feedAgents = useMemo(() => {
+    const fa = new Map<string, Agent>()
+    for (const [sid, stats] of perSession) {
+      if (!visibleSessionIds.has(sid)) continue
+      for (const [agentId, ag] of stats.agents) {
+        fa.set(`${sid}:${agentId}`, ag)
+      }
+    }
+    return fa
+  }, [perSession, visibleSessionIds])
+
+  const agentToSession = useMemo(() => {
+    const a2s = new Map<string, string>()
+    for (const [sid, stats] of perSession) {
+      if (!visibleSessionIds.has(sid)) continue
+      for (const [agentId] of stats.agents) {
+        a2s.set(`${sid}:${agentId}`, sid)
+      }
+    }
+    return a2s
+    // TODO: Per-session caching — track individual session Map references to
+    // avoid rebuilding entries for sessions that haven't changed.
   }, [perSession, visibleSessionIds])
 
   // Slot assignment: each live session gets the lowest unused slot, stable for
@@ -383,11 +428,7 @@ function AgentVisualizerInner() {
             zoomToFitTrigger={zoomToFitTrigger}
             pauseAutoFit={selection.contextMenu !== null}
             getSessionEventLog={bridge.getSessionEventLog}
-            onAgentClick={(id, sessionId) => {
-              if (sessionId !== bridge.selectedSessionId) bridge.selectSession(sessionId)
-              if (selection.selectedAgentId) selection.clearAgent()
-              void id
-            }}
+            onAgentClick={handleCanvasAgentClick}
             onAgentHover={selection.setHoveredAgentId}
             onAgentDrag={updateAgentPosition}
             onContextMenu={selection.handleContextMenu}

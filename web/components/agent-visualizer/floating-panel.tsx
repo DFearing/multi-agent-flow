@@ -1,6 +1,6 @@
 'use client'
 
-import { type ReactNode, useCallback, useRef, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useRef, useEffect, useState, memo, useMemo } from 'react'
 import { Rnd } from 'react-rnd'
 import { usePanelLayout, type PanelId, type PanelRect } from '@/hooks/use-panel-layout'
 import { COLORS } from '@/lib/colors'
@@ -36,9 +36,36 @@ const FONT_STEP = 0.1
 const FONT_MIN = 0.5
 const FONT_MAX = 3.0
 
+// ─── Hoisted static objects (stable references across renders) ────────────────
+
+const ENABLE_RESIZING = {
+  top: true,
+  right: true,
+  bottom: true,
+  left: true,
+  topRight: true,
+  bottomRight: true,
+  bottomLeft: true,
+  topLeft: true,
+} as const
+
+const OUTER_DIV_STYLE: React.CSSProperties = {
+  width: '100%',
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  background: COLORS.glassBg,
+  backdropFilter: 'blur(20px)',
+  WebkitBackdropFilter: 'blur(20px)',
+  border: `1px solid ${COLORS.glassBorder}`,
+  borderRadius: 8,
+  boxShadow: '0 0 20px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(100, 200, 255, 0.08)',
+  overflow: 'hidden',
+}
+
 // ─── Component ─────────────────────────────────────────────────────────────────
 
-export function FloatingPanel({
+export const FloatingPanel = memo(function FloatingPanel({
   id,
   defaultRect,
   minW = 120,
@@ -122,6 +149,20 @@ export function FloatingPanel({
     bringToFront(id, rectRef.current)
   }, [id, bringToFront])
 
+  const resizeHandleComponent = useMemo(() => {
+    const handle = <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />
+    return {
+      top: handle,
+      right: handle,
+      bottom: handle,
+      left: handle,
+      topRight: handle,
+      bottomRight: handle,
+      bottomLeft: handle,
+      topLeft: handle,
+    }
+  }, [resetToDefaultSize])
+
   if (!visible || !mounted) return null
   if (rect.hidden) return null
 
@@ -140,26 +181,8 @@ export function FloatingPanel({
         zIndex: rect.z,
         pointerEvents: 'auto',
       }}
-      enableResizing={{
-        top: true,
-        right: true,
-        bottom: true,
-        left: true,
-        topRight: true,
-        bottomRight: true,
-        bottomLeft: true,
-        topLeft: true,
-      }}
-      resizeHandleComponent={{
-        top: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-        right: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-        bottom: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-        left: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-        topRight: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-        bottomRight: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-        bottomLeft: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-        topLeft: <ResizeHandleSurface onDoubleClick={resetToDefaultSize} />,
-      }}
+      enableResizing={ENABLE_RESIZING}
+      resizeHandleComponent={resizeHandleComponent}
     >
       <div
         // Capture-phase mousedown so bringToFront fires *before* the inner
@@ -167,19 +190,7 @@ export function FloatingPanel({
         // clicking inside a panel that has stopPropagation handlers (e.g. a
         // session canvas) would never reach Rnd's bubble-phase onMouseDown.
         onMouseDownCapture={handleMouseDown}
-        style={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          background: COLORS.glassBg,
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          border: `1px solid ${COLORS.glassBorder}`,
-          borderRadius: 8,
-          boxShadow: '0 0 20px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(100, 200, 255, 0.08)',
-          overflow: 'hidden',
-        }}
+        style={OUTER_DIV_STYLE}
       >
         {/* Title bar / drag handle */}
         {title != null && (
@@ -311,7 +322,7 @@ export function FloatingPanel({
       </div>
     </Rnd>
   )
-}
+})
 
 // ─── Font scale buttons ─────────────────────────────────────────────────────────
 

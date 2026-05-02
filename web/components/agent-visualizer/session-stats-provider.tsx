@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useCallback, useContext, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import type { Agent, ToolCallNode } from '@/lib/agent-types'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 
@@ -10,13 +10,20 @@ export interface SessionStats {
   conversations: Map<string, ConversationMessage[]>
 }
 
-interface SessionStatsAPI {
-  perSession: Map<string, SessionStats>
+// ─── Data context (changes when perSession map changes) ──────────────────────
+
+const SessionStatsDataContext = createContext<Map<string, SessionStats> | null>(null)
+
+// ─── Dispatch context (stable for the lifetime of the provider) ──────────────
+
+interface SessionStatsDispatchAPI {
   setSessionStats: (sessionId: string, stats: SessionStats) => void
   removeSessionStats: (sessionId: string) => void
 }
 
-const Context = createContext<SessionStatsAPI | null>(null)
+const SessionStatsDispatchContext = createContext<SessionStatsDispatchAPI | null>(null)
+
+// ─── Provider ────────────────────────────────────────────────────────────────
 
 export function SessionStatsProvider({ children }: { children: ReactNode }) {
   const [perSession, setPerSession] = useState<Map<string, SessionStats>>(() => new Map())
@@ -44,15 +51,49 @@ export function SessionStatsProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  const dispatch = useMemo<SessionStatsDispatchAPI>(
+    () => ({ setSessionStats, removeSessionStats }),
+    // Both callbacks are stable (useCallback with []), so this memo never recomputes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
   return (
-    <Context.Provider value={{ perSession, setSessionStats, removeSessionStats }}>
-      {children}
-    </Context.Provider>
+    <SessionStatsDataContext.Provider value={perSession}>
+      <SessionStatsDispatchContext.Provider value={dispatch}>
+        {children}
+      </SessionStatsDispatchContext.Provider>
+    </SessionStatsDataContext.Provider>
   )
 }
 
-export function useSessionStats(): SessionStatsAPI {
-  const ctx = useContext(Context)
-  if (!ctx) throw new Error('useSessionStats must be used inside <SessionStatsProvider>')
+// ─── Hooks ───────────────────────────────────────────────────────────────────
+
+/** Read the per-session stats Map. Re-renders only when the Map reference changes. */
+export function useSessionStatsData(): Map<string, SessionStats> {
+  const ctx = useContext(SessionStatsDataContext)
+  if (ctx === null) throw new Error('useSessionStatsData must be used inside <SessionStatsProvider>')
   return ctx
+}
+
+/** Access the stable dispatch API. Never causes a re-render on its own. */
+export function useSessionStatsDispatch(): SessionStatsDispatchAPI {
+  const ctx = useContext(SessionStatsDispatchContext)
+  if (!ctx) throw new Error('useSessionStatsDispatch must be used inside <SessionStatsProvider>')
+  return ctx
+}
+
+// ─── Legacy hook (deprecated — prefer the split hooks) ───────────────────────
+
+interface SessionStatsAPI {
+  perSession: Map<string, SessionStats>
+  setSessionStats: (sessionId: string, stats: SessionStats) => void
+  removeSessionStats: (sessionId: string) => void
+}
+
+/** @deprecated Use useSessionStatsData() and useSessionStatsDispatch() instead. */
+export function useSessionStats(): SessionStatsAPI {
+  const perSession = useSessionStatsData()
+  const dispatch = useSessionStatsDispatch()
+  return { perSession, ...dispatch }
 }
