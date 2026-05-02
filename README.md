@@ -1,14 +1,14 @@
-# Agent Flow
+# multi-agent-flow
 
-Real-time visualization of Claude Code and Codex agent orchestration. Watch your agents think, branch, and coordinate as they work. [Demo video here](https://www.youtube.com/watch?v=Ud6eDrFN-TA). 
+Real-time visualization of Claude Code and Codex agent orchestration. Watch your agents think, branch, and coordinate as they work. [Demo video here](https://www.youtube.com/watch?v=Ud6eDrFN-TA).
 
-![Agent Flow visualization](https://res.cloudinary.com/dxlvclh9c/image/upload/v1773924941/screenshot_e7yox3.png)
+A performance-focused fork of [patoles/agent-flow](https://github.com/patoles/agent-flow) with multi-window support, an alternative Pixi/WebGL renderer, and a benchmark harness for tracking render-path regressions.
 
-## Why Agent Flow?
+![multi-agent-flow visualization](https://res.cloudinary.com/dxlvclh9c/image/upload/v1773924941/screenshot_e7yox3.png)
 
-I built Agent Flow while developing [CraftMyGame](https://craftmygame.com), a game creation platform driven by AI agents. Debugging agent behavior was painful, so we made it visual. Now we're sharing it.
+## Why?
 
-Claude Code is powerful, but its execution is a black box — you see the final result, not the journey. Agent Flow makes the invisible visible:
+Claude Code is powerful, but its execution is a black box — you see the final result, not the journey. multi-agent-flow makes the invisible visible:
 
 - **Understand agent behavior** — See how Claude breaks down problems, which tools it reaches for, and how subagents coordinate
 - **Debug tool call chains** — When something goes wrong, trace the exact sequence of decisions and tool calls that led there
@@ -17,14 +17,21 @@ Claude Code is powerful, but its execution is a black box — you see the final 
 
 ## Features
 
-- **Live agent visualization**: Watch agent execution as an interactive node graph with real-time tool calls, branching, and return flows
+- **Live agent visualization**: Interactive node graph with real-time tool calls, branching, and return flows
 - **Claude Code + Codex**: Auto-detects sessions from both runtimes concurrently and shows them side-by-side, or restrict to one via the `agentVisualizer.runtime` setting
 - **Claude Code hooks**: Lightweight HTTP hook server receives events directly from Claude Code for zero-latency streaming
-- **Codex rollout tailing**: Reads `~/.codex/sessions/**/rollout-*.jsonl` (respects `CODEX_HOME`) and surfaces tool calls, reasoning, and authoritative token counts from Codex's own event stream
-- **Multi-session support**: Track multiple concurrent agent sessions with tabs
+- **Codex rollout tailing**: Reads `~/.codex/sessions/**/rollout-*.jsonl` (respects `CODEX_HOME`) and surfaces tool calls, reasoning, and authoritative token counts
+- **Multi-session support**: Track multiple concurrent agent sessions
 - **Interactive canvas**: Pan, zoom, click agents and tool calls to inspect details
-- **Timeline & transcript panels**: Review the full execution timeline, file attention heatmap, and message transcript
+- **Timeline & transcript panels**: Full execution timeline, file attention heatmap, and message transcript
 - **JSONL log file support**: Point at any JSONL event log to replay or watch agent activity
+
+### Fork additions
+
+- **Multi-window panels** — detach sessions into independent `window.open`'d panels; render-rAF auto-pauses for hidden / minimized panels
+- **Pixi/WebGL renderer (opt-in)** — append `?renderer=pixi` to the URL for the alternative Pixi v8 render path (one shared GL context across all viewports, GPU-accelerated bloom, glyph atlas with LRU eviction). Default remains Canvas2D
+- **Page-wide FPS indicator** in the top bar
+- **Shared simulation manager** with one rAF loop across all sessions and renderers, plus typed-array agent position buffers
 
 ## Getting Started
 
@@ -44,8 +51,8 @@ Options:
 ### Standalone Web App (from source)
 
 ```bash
-git clone https://github.com/patoles/agent-flow.git
-cd agent-flow
+git clone https://github.com/DFearing/multi-agent-flow.git
+cd multi-agent-flow
 pnpm i
 pnpm run setup      # configure Claude Code hooks (one-time)
 pnpm run dev        # start the web app + event relay
@@ -131,6 +138,37 @@ Other scripts:
 | `pnpm run build:web` | Build the Next.js web app |
 | `pnpm run build:extension` | Build the extension |
 | `pnpm run build:webview` | Build the webview assets |
+| `pnpm run build:app` | Build the standalone Node binary (relay + prebuilt webview, single-port) |
+| `pnpm sim <scenario>` | Replay a deterministic event scenario into the running relay |
+| `pnpm test` | Run the relay + extension test suites |
+
+### Scenario simulator (`pnpm sim`)
+
+A deterministic wire-format simulator that writes JSONL event files in the layout the relay expects. Use it to drive the visualizer without needing a live agent session — useful for development, demos, and the benchmark harness.
+
+```bash
+pnpm sim --list                    # list available scenarios
+pnpm sim concurrent                # 3 sessions × 3 subagents/round, continuous
+pnpm sim multi-session --speed 2   # run 2× faster
+```
+
+Scenarios live in `scripts/sim/scenarios.ts`: `solo`, `tool-failure`, `subagents`, `multi-session`, `stress`, `permission-prompt`, `concurrent`. The simulator only produces JSONL — start the relay separately (`pnpm dev`, `pnpm dev:relay`, or `npx agent-flow-app`).
+
+### Performance benchmark harness (`bench/`)
+
+Empirical A/B/C harness that compares render performance across checkouts using a deterministic simulator workload and headless Chromium with CDP perf instrumentation. Measures FPS mean, frame-time p50/p95/p99, long-task count + total blocking time, scripting/task/layout time, heap peak/mean, and React commit count.
+
+```bash
+cd bench
+pnpm install
+pnpx playwright install chromium
+
+node run-bench.mjs                       # all stacks × throttles × 5 reps (~60 min)
+node run-bench.mjs --smoke --stack A-base  # ~50 s smoke
+node run-bench.mjs --summarize           # re-aggregate without re-running
+```
+
+Outputs land in `bench/results/`: `runs.jsonl` (raw per-run rows + CDP snapshot) and `summary.md` (aggregated comparison + deltas). Full flag list, stack configuration, and caveats: see [bench/README.md](bench/README.md).
 
 ## Star History
 
