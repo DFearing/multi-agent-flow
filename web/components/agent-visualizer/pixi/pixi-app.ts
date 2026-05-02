@@ -1,48 +1,251 @@
 /**
- * Pixi v8 application bootstrap + texture/atlas helpers.
+ * Shared Pixi v8 renderer — singleton GL context + multi-viewport.
  *
- * Each PixiCanvas instance gets its own Application. In a follow-up PR we will
- * consolidate to a shared Renderer + multi-viewport, but for the spike each
- * panel is self-contained.
+ * Architecture:
+ *   - ONE Application (one GL context, one offscreen WebGL canvas).
+ *   - N viewports: each PixiCanvas registers a viewport on mount and
+ *     deregisters on unmount.
+ *   - Each viewport owns a Container (its scene-graph subtree) and a
+ *     RenderTexture. On each frame, the shared renderer renders the
+ *     viewport's container into its RenderTexture, then blits the result
+ *     to the viewport's visible <canvas> via Canvas2D drawImage.
+ *   - Texture atlases (glyphs, glow sprites, circle sprites) live on the
+ *     shared renderer — no per-canvas duplication.
+ *
+ * The shared render rAF is owned by SimulationManager.registerRender().
+ * Each PixiCanvas registers its draw callback there; when it runs, it
+ * calls sharedRenderer.renderViewport() for its viewport id.
  */
 
-import { Application, Texture } from 'pixi.js'
+import { Application, Container, RenderTexture, Texture } from 'pixi.js'
 
-/** Options for bootstrapping a Pixi application into a host element. */
-export interface PixiAppOptions {
-  /** DOM element to append the Pixi canvas into */
-  container: HTMLElement
-  /** Initial width in CSS pixels */
+// ─── Viewport registry ─────────────────────────────────────────────────────
+
+/** State tracked per registered viewport. */
+export interface Viewport {
+  /** Unique viewport id (typically React useId or a counter). */
+  id: string
+  /** Root container for this viewport's scene graph. */
+  stage: Container
+  /** Off-screen render texture sized to this viewport's dimensions. */
+  renderTexture: RenderTexture | null
+  /** The visible <canvas> element in the DOM for this viewport. */
+  canvas: HTMLCanvasElement | null
+  /** Canvas 2D context for blitting the render texture to the visible canvas. */
+  ctx: CanvasRenderingContext2D | null
+  /** Current viewport dimensions in CSS pixels. */
   width: number
-  /** Initial height in CSS pixels */
   height: number
-  /** Background color (hex number) */
-  backgroundColor?: number
+}
+
+/** Singleton state for the shared renderer. */
+interface SharedRendererState {
+  app: Application
+  viewports: Map<string, Viewport>
+  /** Reference count — destroy the app when it drops to 0. */
+  refCount: number
+  /** True once app.init() has resolved. */
+  ready: boolean
+  /** Pending init promise (prevents double-init). */
+  initPromise: Promise<void> | null
+}
+
+let shared: SharedRendererState | null = null
+
+/**
+ * Acquire the shared Pixi Application. The first call creates and
+ * initializes it; subsequent calls increment the ref count.
+ *
+ * Call `releaseSharedRenderer()` on teardown — when refCount hits 0
+ * the Application is destroyed.
+ */
+export async function acquireSharedRenderer(): Promise<Application> {
+  if (shared) {
+    shared.refCount++
+    if (shared.initPromise) await shared.initPromise
+    return shared.app
+  }
+
+  const app = new Application()
+
+  const state: SharedRendererState = {
+    app,
+    viewports: new Map(),
+    refCount: 1,
+    ready: false,
+    initPromise: null,
+  }
+  shared = state
+
+  // Create a hidden offscreen canvas for the GL context. It won't be
+  // appended to the DOM — rendering goes through RenderTextures.
+  state.initPromise = app.init({
+    backgroundColor: 0x050510,
+    antialias: true,
+    resolution: typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
+    autoDensity: true,
+    preference: 'webgl',
+    width: 1,
+    height: 1,
+  }).then(() => {
+    state.ready = true
+    state.initPromise = null
+  })
+
+  await state.initPromise
+  return app
 }
 
 /**
- * Create and initialize a Pixi v8 Application. Returns the app and its root
- * stage container.
- *
- * The caller is responsible for calling `app.destroy(true)` on teardown.
+ * Release one reference to the shared renderer. When refCount reaches 0,
+ * the Application and all viewports are destroyed.
  */
-export async function createPixiApp(options: PixiAppOptions): Promise<Application> {
-  const app = new Application()
-  await app.init({
-    resizeTo: options.container,
-    backgroundColor: options.backgroundColor ?? 0x050510,
-    antialias: true,
-    // Use device pixel ratio for sharp rendering
-    resolution: window.devicePixelRatio || 1,
-    autoDensity: true,
-    // Prefer WebGL — fallback to WebGPU is fine too
-    preference: 'webgl',
+export function releaseSharedRenderer(): void {
+  if (!shared) return
+  shared.refCount--
+  if (shared.refCount <= 0) {
+    for (const vp of shared.viewports.values()) {
+      if (vp.renderTexture) vp.renderTexture.destroy(true)
+      vp.stage.destroy({ children: true })
+    }
+    shared.viewports.clear()
+    shared.app.destroy(true)
+    shared = null
+  }
+}
+
+/** Get the number of currently registered viewports (for tests). */
+export function getViewportCount(): number {
+  return shared?.viewports.size ?? 0
+}
+
+/** Check whether the shared renderer is initialized (for tests). */
+export function isSharedRendererActive(): boolean {
+  return shared !== null && shared.ready
+}
+
+/**
+ * Register a new viewport. Returns the Viewport record.
+ * The caller owns the stage Container (adding layers to it).
+ */
+export function registerViewport(id: string): Viewport {
+  if (!shared) throw new Error('SharedRenderer not initialized — call acquireSharedRenderer() first')
+  const existing = shared.viewports.get(id)
+  if (existing) return existing
+
+  const stage = new Container()
+  stage.label = `viewport-${id}`
+
+  const viewport: Viewport = {
+    id,
+    stage,
+    renderTexture: null,
+    canvas: null,
+    ctx: null,
+    width: 0,
+    height: 0,
+  }
+  shared.viewports.set(id, viewport)
+  return viewport
+}
+
+/**
+ * Deregister a viewport and free its RenderTexture. The stage Container
+ * is destroyed along with its children.
+ */
+export function deregisterViewport(id: string): void {
+  if (!shared) return
+  const vp = shared.viewports.get(id)
+  if (!vp) return
+  if (vp.renderTexture) {
+    vp.renderTexture.destroy(true)
+    vp.renderTexture = null
+  }
+  vp.stage.destroy({ children: true })
+  shared.viewports.delete(id)
+}
+
+/**
+ * Bind a visible <canvas> element to a viewport and set its dimensions.
+ * Must be called after registerViewport and whenever the canvas resizes.
+ */
+export function bindViewportCanvas(
+  id: string,
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+): void {
+  if (!shared) return
+  const vp = shared.viewports.get(id)
+  if (!vp) return
+
+  vp.canvas = canvas
+  vp.ctx = canvas.getContext('2d')
+  resizeViewport(id, width, height)
+}
+
+/**
+ * Resize a viewport's RenderTexture to match new dimensions.
+ */
+export function resizeViewport(id: string, width: number, height: number): void {
+  if (!shared || !shared.ready) return
+  const vp = shared.viewports.get(id)
+  if (!vp) return
+  if (width <= 0 || height <= 0) return
+  if (vp.width === width && vp.height === height && vp.renderTexture) return
+
+  vp.width = width
+  vp.height = height
+
+  const resolution = shared.app.renderer.resolution
+
+  // Destroy old render texture
+  if (vp.renderTexture) {
+    vp.renderTexture.destroy(true)
+  }
+
+  // Create new render texture at the viewport's size
+  vp.renderTexture = RenderTexture.create({
+    width: width,
+    height: height,
+    resolution,
   })
 
-  // Pixi v8: the canvas is app.canvas
-  options.container.appendChild(app.canvas)
+  // Also resize the visible canvas backing store
+  if (vp.canvas) {
+    vp.canvas.width = Math.round(width * resolution)
+    vp.canvas.height = Math.round(height * resolution)
+  }
+}
 
-  return app
+/**
+ * Render a viewport's scene graph to its RenderTexture, then blit to
+ * the visible canvas. Called once per viewport per frame from the
+ * PixiCanvas draw callback.
+ */
+export function renderViewport(id: string): void {
+  if (!shared || !shared.ready) return
+  const vp = shared.viewports.get(id)
+  if (!vp || !vp.renderTexture || !vp.canvas || !vp.ctx) return
+
+  const renderer = shared.app.renderer
+
+  // Render the viewport's scene graph into its RenderTexture
+  renderer.render({
+    container: vp.stage,
+    target: vp.renderTexture,
+    clear: true,
+  })
+
+  // Extract pixels and blit to the visible canvas.
+  // The renderer's internal canvas holds the last render target's content
+  // after extract. We use extract.canvas() for a direct Canvas2D blit.
+  const pixels = renderer.extract.canvas(vp.renderTexture)
+  if (pixels) {
+    const ctx = vp.ctx
+    ctx.clearRect(0, 0, vp.canvas.width, vp.canvas.height)
+    ctx.drawImage(pixels as CanvasImageSource, 0, 0)
+  }
 }
 
 // ─── Texture helpers ────────────────────────────────────────────────────────

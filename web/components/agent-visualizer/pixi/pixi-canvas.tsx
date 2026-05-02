@@ -6,20 +6,34 @@
  * Gated behind `?renderer=pixi`. Same prop contract as AgentCanvas so the
  * two are interchangeable in session-canvas-panel.tsx.
  *
- * All rendering layers are implemented:
+ * Uses the shared Pixi renderer (single GL context). Each PixiCanvas
+ * instance registers a viewport that owns:
+ *   - A Container (scene-graph subtree with all layers)
+ *   - A RenderTexture (off-screen render target)
+ *   - A visible <canvas> element (receives blitted pixels each frame)
+ *
+ * Rendering layers (z-order):
  *   background -> edges -> tool-calls -> discoveries -> agents -> bubbles -> particles
- * Bloom post-processing is applied as a stage-level filter.
- * Effects layer (spawn/complete FX) is the only remaining TODO.
+ * Bloom post-processing is applied per-viewport as a stage-level filter.
  */
 
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
-import type { Application } from 'pixi.js'
+import { useRef, useEffect, useState, useCallback, useMemo, useId } from 'react'
 import { Container } from 'pixi.js'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
 import { createPixiHitTestAdapter } from '@/hooks/hit-test-adapters'
-import { createPixiApp, disposeTextureCache } from './pixi-app'
+import {
+  acquireSharedRenderer,
+  releaseSharedRenderer,
+  registerViewport,
+  deregisterViewport,
+  bindViewportCanvas,
+  resizeViewport,
+  renderViewport,
+  disposeTextureCache,
+} from './pixi-app'
+import type { Viewport } from './pixi-app'
 import { BackgroundLayer } from './background-layer'
 import { AgentsLayer } from './agents-layer'
 import { EdgesLayer } from './edges-layer'
@@ -80,7 +94,8 @@ export function PixiCanvas({
 }: CanvasProps) {
   const manager = useSimulationManager()
   const containerRef = useRef<HTMLDivElement>(null)
-  const appRef = useRef<Application | null>(null)
+  const visibleCanvasRef = useRef<HTMLCanvasElement>(null)
+  const viewportRef = useRef<Viewport | null>(null)
   const backgroundLayerRef = useRef<BackgroundLayer | null>(null)
   const agentsLayerRef = useRef<AgentsLayer | null>(null)
   const edgesLayerRef = useRef<EdgesLayer | null>(null)
@@ -95,6 +110,9 @@ export function PixiCanvas({
   const timeRef = useRef(0)
   const lastFrameRef = useRef(0)
 
+  // Stable viewport id for this component instance
+  const viewportId = useId()
+
   // IntersectionObserver visibility gating
   const visibleRef = useRef(true)
   const needsCatchUpRef = useRef(false)
@@ -107,15 +125,17 @@ export function PixiCanvas({
     if (!el) return
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setDimensions({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height,
-        })
+        const w = entry.contentRect.width
+        const h = entry.contentRect.height
+        setDimensions({ width: w, height: h })
+        // Resize the viewport's RenderTexture to match
+        resizeViewport(viewportId, w, h)
       }
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewportId])
 
   // ─── IntersectionObserver: pause render rAF when off-screen ─────────────
   useEffect(() => {
@@ -143,11 +163,7 @@ export function PixiCanvas({
 
   // ─── Element ref for camera/interaction hooks ───────────────────────────
   // useCanvasCamera and useCanvasInteraction accept RefObject<HTMLElement>.
-  // In the Pixi path the canvas is created asynchronously by Pixi, so we
-  // point mainCanvasRef at the container div instead — it has the same
-  // bounding rect (Pixi's canvas fills it via `resizeTo`), and it's
-  // available synchronously at mount so useCanvasInteraction's wheel
-  // useEffect can attach immediately.
+  // We use the container div — it has the same bounding rect as the canvas.
   const mainCanvasRef = useRef<HTMLElement | null>(null)
 
   // Populate mainCanvasRef from the container div on mount.
@@ -161,8 +177,6 @@ export function PixiCanvas({
   const simTimeRef = useRef(0)
 
   // ─── DrawProps ref for camera + interaction hooks ───────────────────────
-  // Matches the contract expected by useCanvasCamera and useCanvasInteraction.
-  // Updated at the top of each draw frame from simulationRef.
   const sim = simulationRef.current
   const drawPropsRef = useRef({
     agents: sim.agents,
@@ -180,7 +194,7 @@ export function PixiCanvas({
     onDiscoveryClick,
   })
 
-  // Sync React props into drawPropsRef every render (cheap — just ref writes)
+  // Sync React props into drawPropsRef every render
   drawPropsRef.current.selectedAgentId = selectedAgentId
   drawPropsRef.current.pauseAutoFit = pauseAutoFit
   drawPropsRef.current.dimensions = dimensions
@@ -201,9 +215,7 @@ export function PixiCanvas({
     minZoomLevel,
   })
 
-  // ─── Interaction ────────────────────────────────────────────────────────
   // ─── Hit-detection adapter (Pixi path) ──────────────────────────────────
-  // Stable across renders — the adapter closes over refs, not values.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const hitTestAdapter = useMemo(
     () => createPixiHitTestAdapter(drawPropsRef, simTimeRef),
@@ -221,23 +233,14 @@ export function PixiCanvas({
   // Keep drawPropsRef in sync with interaction state
   drawPropsRef.current.isDragging = isDragging
 
-  // ─── Scene graph layers ─────────────────────────────────────────────────
-  // Each layer is a Container added to the stage in z-order:
-  // background -> edges -> tool-calls -> discoveries -> agents -> bubbles -> particles
-  // Bloom filter applied at stage level.
-  // TODO: effects-layer (spawn/complete FX)
-
   // ─── Bootstrap ──────────────────────────────────────────────────────────
 
-  // Stable ref for the draw-loop closure so it always reads latest hook values
   const updateCameraRef = useRef(updateCamera)
   updateCameraRef.current = updateCamera
   const updateDragLerpRef = useRef(updateDragLerp)
   updateDragLerpRef.current = updateDragLerp
 
   // ─── Draw callback (registered with shared render loop) ─────────────
-  // Defined at component scope using refs so it doesn't depend on the
-  // async boot closure. readyRef gates execution until layers are built.
   const drawRef = useRef<(timestamp: number) => void>(() => {})
 
   const pixiDraw = useCallback((timestamp: number) => {
@@ -253,7 +256,7 @@ export function PixiCanvas({
     lastFrameRef.current = timestamp
     timeRef.current += dt
 
-    // Read simulation state from ref — no React re-render needed
+    // Read simulation state from ref
     const s = simulationRef.current
     const p = drawPropsRef.current
     p.agents = s.agents
@@ -273,7 +276,7 @@ export function PixiCanvas({
     // Apply camera transform to the world container
     applyCameraTransform(world, transformRef.current)
 
-    // Update layers — all refs are populated after boot
+    // Update layers
     backgroundLayerRef.current?.update(
       p.dimensions.width,
       p.dimensions.height,
@@ -320,8 +323,11 @@ export function PixiCanvas({
       s.toolCalls,
       timeRef.current,
     )
+
+    // Render this viewport via the shared renderer and blit to the visible canvas
+    renderViewport(viewportId)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- layer refs are stable; hook refs kept in sync above
-  }, [simulationRef, transformRef, showHexGrid, selectedToolCallId, selectedDiscoveryId, selectedAgentId, hoveredAgentId, showStats])
+  }, [simulationRef, transformRef, showHexGrid, selectedToolCallId, selectedDiscoveryId, selectedAgentId, hoveredAgentId, showStats, viewportId])
 
   drawRef.current = pixiDraw
 
@@ -331,33 +337,37 @@ export function PixiCanvas({
     return manager.registerRender(callback)
   }, [manager])
 
-  // ─── Bootstrap (scene graph only — no rAF) ─────────────────────────────
+  // ─── Bootstrap (shared renderer + scene graph) ─────────────────────────
 
   useEffect(() => {
     const el = containerRef.current
-    if (!el) return
+    const canvas = visibleCanvasRef.current
+    if (!el || !canvas) return
 
     let destroyed = false
-    let localApp: Application | null = null
 
     const boot = async () => {
-      const app = await createPixiApp({
-        container: el,
-        width: el.clientWidth,
-        height: el.clientHeight,
-      })
+      // Acquire the shared renderer (creates the GL context on first call)
+      await acquireSharedRenderer()
+
       if (destroyed) {
-        app.destroy(true)
+        releaseSharedRenderer()
         return
       }
 
-      localApp = app
-      appRef.current = app
+      // Register this component as a viewport
+      const viewport = registerViewport(viewportId)
+      viewportRef.current = viewport
 
-      // ── Build scene graph ──────────────────────────────────────────
+      // Bind the visible canvas to the viewport
+      const w = el.clientWidth || 800
+      const h = el.clientHeight || 600
+      bindViewportCanvas(viewportId, canvas, w, h)
+
+      // ── Build scene graph within the viewport's stage ────────────
       const world = new Container()
       world.label = 'world'
-      app.stage.addChild(world)
+      viewport.stage.addChild(world)
       worldRef.current = world
 
       backgroundLayerRef.current = new BackgroundLayer()
@@ -381,9 +391,9 @@ export function PixiCanvas({
       particlesLayerRef.current = new ParticlesLayer()
       world.addChild(particlesLayerRef.current.container)
 
-      // Bloom filter — stage-level post-processing
+      // Bloom filter — per-viewport post-processing
       const bloomFilter = new PixiBloomFilter(0.6)
-      app.stage.filters = [bloomFilter.filter]
+      viewport.stage.filters = [bloomFilter.filter]
       bloomFilterRef.current = bloomFilter
 
       // Signal that the draw callback can start rendering.
@@ -395,6 +405,8 @@ export function PixiCanvas({
     return () => {
       destroyed = true
       readyRef.current = false
+
+      // Dispose layers (before deregisterViewport destroys the stage)
       if (backgroundLayerRef.current) {
         backgroundLayerRef.current.dispose()
         backgroundLayerRef.current = null
@@ -428,14 +440,17 @@ export function PixiCanvas({
         bloomFilterRef.current = null
       }
       worldRef.current = null
-      if (localApp) {
-        localApp.destroy(true)
-      }
-      appRef.current = null
+      viewportRef.current = null
+
+      // Deregister viewport (frees RenderTexture + stage)
+      deregisterViewport(viewportId)
+
+      // Release shared renderer (may destroy GL context if last viewport)
+      releaseSharedRenderer()
       disposeTextureCache()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once
-  }, [])
+  }, [viewportId])
 
   return (
     <div
@@ -443,6 +458,12 @@ export function PixiCanvas({
       className="relative w-full h-full overflow-hidden"
       style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
       {...handlers}
-    />
+    >
+      <canvas
+        ref={visibleCanvasRef}
+        className="w-full h-full"
+        style={{ width: dimensions.width, height: dimensions.height }}
+      />
+    </div>
   )
 }
