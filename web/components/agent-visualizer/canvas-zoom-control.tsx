@@ -55,7 +55,6 @@ export function CanvasZoomControl({
 
   const pct = Math.round(value * 100)
   const active = value > 0
-  const label = active ? `${pct}%` : '⊘'
 
   const popover = (
     <div
@@ -171,7 +170,7 @@ export function CanvasZoomControl({
         }}
       >
         <span style={{ fontSize: 16, lineHeight: 1 }}>🔍</span>
-        <span>{label}</span>
+        {active && <span>{pct}%</span>}
       </button>
       {open && anchorRect && typeof document !== 'undefined' && createPortal(popover, document.body)}
     </>
