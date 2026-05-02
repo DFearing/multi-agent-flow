@@ -11,12 +11,15 @@
  * depth particles, hex grid) are stubbed as TODOs.
  */
 
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import type { Application } from 'pixi.js'
 import { Container } from 'pixi.js'
 import type { SimulationState } from '@/hooks/simulation/types'
+import { useCanvasCamera } from '@/hooks/use-canvas-camera'
+import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
 import { createPixiApp, disposeTextureCache } from './pixi-app'
 import { ParticlesLayer } from './particles-layer'
+import { applyCameraTransform } from './camera'
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -42,9 +45,6 @@ interface CanvasProps {
 
 export function PixiCanvas({
   simulationRef,
-  // Props consumed by stubbed layers — destructured to satisfy the contract
-  // but unused until those layers are implemented in follow-up PRs.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   selectedAgentId,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   hoveredAgentId,
@@ -52,37 +52,128 @@ export function PixiCanvas({
   showStats,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   showHexGrid,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   zoomToFitTrigger,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   pauseAutoFit,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onAgentClick,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onAgentHover,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onAgentDrag,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onContextMenu,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onToolCallClick,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   selectedToolCallId,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onDiscoveryClick,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   selectedDiscoveryId,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   showCostOverlay,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   minZoomLevel,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
+  const worldRef = useRef<Container | null>(null)
   const animRef = useRef<number>(0)
   const timeRef = useRef(0)
   const lastFrameRef = useRef(0)
+
+  // ─── Dimensions (mirrors Canvas2D path) ─────────────────────────────────
+  const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setDimensions({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        })
+      }
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // ─── Canvas ref for camera/interaction hooks ────────────────────────────
+  // useCanvasCamera and useCanvasInteraction expect a ref to an element for
+  // bounding rect calculations and native wheel listener attachment. In the
+  // Canvas2D path this is the <canvas> element; in the Pixi path the canvas
+  // is created asynchronously by Pixi. We point mainCanvasRef at the
+  // container div instead — it has the same bounding rect (Pixi's canvas
+  // fills it via `resizeTo`), and it's available synchronously at mount so
+  // useCanvasInteraction's wheel useEffect can attach immediately.
+  //
+  // The cast to HTMLCanvasElement is safe because the hooks only use
+  // getBoundingClientRect() and addEventListener('wheel', ...), both of
+  // which are on HTMLElement. If a future hook calls canvas-specific APIs
+  // (getContext, toDataURL, etc.), this will need to change.
+  const mainCanvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  // Populate mainCanvasRef from the container div on mount. The cast is safe
+  // because the hooks only use getBoundingClientRect() and addEventListener(),
+  // both inherited from HTMLElement. This effect runs before the hooks' effects
+  // (React fires effects in registration order), so the wheel handler in
+  // useCanvasInteraction will find the element on its first (and only) run.
+  useEffect(() => {
+    if (containerRef.current) {
+      mainCanvasRef.current = containerRef.current as unknown as HTMLCanvasElement
+    }
+  }, [])
+
+  // ─── Simulation time ref (written in draw loop) ─────────────────────────
+  const simTimeRef = useRef(0)
+
+  // ─── DrawProps ref for camera + interaction hooks ───────────────────────
+  // Matches the contract expected by useCanvasCamera and useCanvasInteraction.
+  // Updated at the top of each draw frame from simulationRef.
+  const sim = simulationRef.current
+  const drawPropsRef = useRef({
+    agents: sim.agents,
+    toolCalls: sim.toolCalls,
+    discoveries: sim.discoveries,
+    dimensions,
+    selectedAgentId,
+    pauseAutoFit,
+    isDragging: false,
+    onAgentClick,
+    onAgentHover,
+    onAgentDrag,
+    onContextMenu,
+    onToolCallClick,
+    onDiscoveryClick,
+  })
+
+  // Sync React props into drawPropsRef every render (cheap — just ref writes)
+  drawPropsRef.current.selectedAgentId = selectedAgentId
+  drawPropsRef.current.pauseAutoFit = pauseAutoFit
+  drawPropsRef.current.dimensions = dimensions
+  drawPropsRef.current.onAgentClick = onAgentClick
+  drawPropsRef.current.onAgentHover = onAgentHover
+  drawPropsRef.current.onAgentDrag = onAgentDrag
+  drawPropsRef.current.onContextMenu = onContextMenu
+  drawPropsRef.current.onToolCallClick = onToolCallClick
+  drawPropsRef.current.onDiscoveryClick = onDiscoveryClick
+
+  // ─── Camera ─────────────────────────────────────────────────────────────
+  const {
+    transformRef, userHasNavigatedRef, panVelocityRef,
+    screenToCanvas, doZoomToFit, updateCamera,
+  } = useCanvasCamera({
+    mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
+    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId,
+    minZoomLevel,
+  })
+
+  // ─── Interaction ────────────────────────────────────────────────────────
+  const {
+    isDragging, handlers, updateDragLerp,
+  } = useCanvasInteraction({
+    drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
+    simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef,
+  })
+
+  // Keep drawPropsRef in sync with interaction state
+  drawPropsRef.current.isDragging = isDragging
 
   // ─── Scene graph layers (stubs marked with TODO) ────────────────────────
   // Each layer is a Container added to the stage in z-order.
@@ -98,6 +189,12 @@ export function PixiCanvas({
   // TODO: bloom pass (full-screen shader)
 
   // ─── Bootstrap ──────────────────────────────────────────────────────────
+
+  // Stable ref for the draw-loop closure so it always reads latest hook values
+  const updateCameraRef = useRef(updateCamera)
+  updateCameraRef.current = updateCamera
+  const updateDragLerpRef = useRef(updateDragLerp)
+  updateDragLerpRef.current = updateDragLerp
 
   useEffect(() => {
     const el = containerRef.current
@@ -121,10 +218,13 @@ export function PixiCanvas({
       appRef.current = app
 
       // ── Build scene graph ──────────────────────────────────────────
-      // World container — camera transform applied here
+      // World container — camera transform applied here.
+      // Screen-space layers (HUD, perf overlay) should be added as
+      // siblings of `world` on `app.stage`, NOT as children of `world`.
       const world = new Container()
       world.label = 'world'
       app.stage.addChild(world)
+      worldRef.current = world
 
       // Particles layer (functional)
       const particlesLayer = new ParticlesLayer()
@@ -145,14 +245,28 @@ export function PixiCanvas({
         timeRef.current += dt
 
         // Read simulation state from ref — no React re-render needed
-        const sim = simulationRef.current
+        const s = simulationRef.current
+        const p = drawPropsRef.current
+        p.agents = s.agents
+        p.toolCalls = s.toolCalls
+        p.discoveries = s.discoveries
+        if (s.currentTime != null) simTimeRef.current = s.currentTime
+
+        // Camera physics (inertia + auto-fit)
+        updateCameraRef.current(p.isDragging, p.pauseAutoFit)
+
+        // Floaty agent drag
+        updateDragLerpRef.current(s.agents, p.onAgentDrag)
+
+        // Apply camera transform to the world container
+        applyCameraTransform(world, transformRef.current)
 
         // Update particles layer
         particlesLayer.update(
-          sim.particles,
-          sim.edges,
-          sim.agents,
-          sim.toolCalls,
+          s.particles,
+          s.edges,
+          s.agents,
+          s.toolCalls,
           timeRef.current,
         )
       }
@@ -169,6 +283,7 @@ export function PixiCanvas({
         particlesLayerRef.current.destroy()
         particlesLayerRef.current = null
       }
+      worldRef.current = null
       if (localApp) {
         localApp.destroy(true)
       }
@@ -182,7 +297,8 @@ export function PixiCanvas({
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden"
-      style={{ cursor: 'grab' }}
+      style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+      {...handlers}
     />
   )
 }
