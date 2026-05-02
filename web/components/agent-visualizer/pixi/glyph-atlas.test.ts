@@ -23,7 +23,7 @@ const origCreateElement = document.createElement.bind(document)
 vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
   const el = origCreateElement(tag)
   if (tag === 'canvas') {
-    (el as HTMLCanvasElement).getContext = (() => mockCtx) as unknown as typeof el.getContext
+    (el as HTMLCanvasElement).getContext = (() => mockCtx) as unknown as HTMLCanvasElement['getContext']
   }
   return el
 })
