@@ -157,15 +157,31 @@ export function useVSCodeBridge(): BridgeHookResult {
     // selectedSessionIdRef is updated synchronously (not via React state) so it's
     // always current even before React re-renders.
     const unsubEvent = bridge.onEvent((event: AgentEvent) => {
-      // While we're still buffering the initial backlog, every incoming
-      // event resets the idle timer — once IDLE_FLUSH_MS elapses without
-      // a new event, the flush fires and the canvas pipeline catches up
-      // in one batch. The hard-cap timer below guards against streams
-      // that never quiet down.
-      const inWarmup = !flushedRef.current
-      if (inWarmup) {
+      // During warmup, drop the event entirely — don't buffer it into any
+      // queue. Each incoming event resets the idle timer; once IDLE_FLUSH_MS
+      // passes with no new event, we flip to live mode and the next real
+      // event flows through cleanly. The canvas starts blank and fills in
+      // with live activity, instead of "catching up" on a noisy backlog.
+      if (!flushedRef.current) {
         if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
         flushTimerRef.current = setTimeout(() => fireFlushRef.current(), IDLE_FLUSH_MS)
+        // Track session presence even for dropped events so the session list
+        // stays accurate — without this, a session whose entire backlog lands
+        // in warmup would never appear.
+        if (event.sessionId) {
+          if (!sessionEventsRef.current.has(event.sessionId)) {
+            sessionEventsRef.current.set(event.sessionId, [])
+          }
+          if (event.sessionId !== selectedSessionIdRef.current) {
+            setSessionsWithActivity(prev => {
+              if (prev.has(event.sessionId!)) return prev
+              const next = new Set(prev)
+              next.add(event.sessionId!)
+              return next
+            })
+          }
+        }
+        return
       }
 
       const simEvent: SimulationEvent = {
@@ -196,10 +212,6 @@ export function useVSCodeBridge(): BridgeHookResult {
           return next
         })
       }
-      // Skip the per-event re-render bump while warming up — the deferred
-      // flush effect below fires one bump after the window ends and lets
-      // every panel pick up its full backlog in a single render pass.
-      if (inWarmup) return
 
       // Coalesce re-renders: schedule at most one bump per animation frame
       // so burst events (dozens/sec) only trigger a single React re-render per frame.
