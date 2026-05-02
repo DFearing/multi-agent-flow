@@ -20,6 +20,8 @@
  */
 
 import { Application, Container, EventBoundary, Texture, type WebGLRenderer } from 'pixi.js'
+import { CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from '../canvas/draw-misc'
+import { AGENT_DRAW } from '@/lib/canvas-constants'
 
 // ─── Viewport registry ─────────────────────────────────────────────────────
 
@@ -362,6 +364,77 @@ export function hexagonPoints(radius: number): number[] {
 }
 
 /**
+ * Bake the Claude spark / OpenAI logomark into a texture, matching Canvas2D's
+ * drawClaudeSpark / drawOpenAILogo (draw-agents.ts). One texture per
+ * (runtime, color) combination — color affects the shadow blur tint.
+ *
+ * Per-agent rendering: place a Sprite using this texture, anchor (0.5, 0.5),
+ * scale = agentRadius / BRAND_BAKE_RADIUS so the on-screen brand matches the
+ * Canvas2D `r * sparkScale` size.
+ */
+export const BRAND_BAKE_RADIUS = 64
+const brandTextureCache = new Map<string, Texture>()
+let _claudeSparkPath: Path2D | null = null
+let _openaiLogoPath: Path2D | null = null
+
+function getClaudeSparkPath(): Path2D {
+  if (!_claudeSparkPath) _claudeSparkPath = new Path2D(CLAUDE_SPARK_D)
+  return _claudeSparkPath
+}
+
+function getOpenAILogoPath(): Path2D {
+  if (!_openaiLogoPath) _openaiLogoPath = new Path2D(OPENAI_LOGO_D)
+  return _openaiLogoPath
+}
+
+export function getBrandTexture(runtime: string | undefined, colorHex: string): Texture {
+  const isCodex = runtime === 'codex'
+  const key = `${isCodex ? 'codex' : 'claude'}|${colorHex}`
+  const cached = brandTextureCache.get(key)
+  if (cached) return cached
+
+  // Sized to fit the rendered brand at BRAND_BAKE_RADIUS, plus padding
+  // for the shadow blur. The Canvas2D path scales the brand to
+  // `r * sparkScale` so at r=64 the rendered brand is ~28 px diameter.
+  const padding = 16
+  const drawnSize = Math.ceil(BRAND_BAKE_RADIUS * AGENT_DRAW.sparkScale * 2)
+  const size = drawnSize + padding * 2
+  const cx = size / 2
+  const cy = size / 2
+
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('getBrandTexture: 2D context unavailable')
+
+  // Mirror Canvas2D drawClaudeSpark / drawOpenAILogo without the surrounding
+  // agent-position translate (we'll position via Pixi sprite at draw time).
+  ctx.translate(cx, cy)
+  if (isCodex) {
+    const scale = (BRAND_BAKE_RADIUS * AGENT_DRAW.sparkScale) / OPENAI_LOGO_VIEWBOX
+    ctx.scale(scale, scale)
+    ctx.translate(-OPENAI_LOGO_VIEWBOX / 2, -OPENAI_LOGO_VIEWBOX / 2)
+    ctx.fillStyle = colorHex
+    ctx.shadowColor = colorHex
+    ctx.shadowBlur = 6 / scale
+    ctx.fill(getOpenAILogoPath())
+  } else {
+    const scale = (BRAND_BAKE_RADIUS * AGENT_DRAW.sparkScale) / AGENT_DRAW.sparkViewBox
+    ctx.scale(scale, scale)
+    ctx.translate(-AGENT_DRAW.sparkViewBox, -AGENT_DRAW.sparkViewBox + 1)
+    ctx.fillStyle = colorHex
+    ctx.shadowColor = colorHex
+    ctx.shadowBlur = 6 / scale
+    ctx.fill(getClaudeSparkPath())
+  }
+
+  const texture = Texture.from(canvas)
+  brandTextureCache.set(key, texture)
+  return texture
+}
+
+/**
  * Dispose of all cached textures. Call when the entire Pixi renderer is
  * torn down to free GPU memory.
  */
@@ -372,4 +445,6 @@ export function disposeTextureCache(): void {
   circleTextureCache.clear()
   for (const t of hexagonTextureCache.values()) t.destroy(true)
   hexagonTextureCache.clear()
+  for (const t of brandTextureCache.values()) t.destroy(true)
+  brandTextureCache.clear()
 }

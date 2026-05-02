@@ -22,15 +22,19 @@ import type { Agent } from '@/lib/agent-types'
 import { NODE, ANIM } from '@/lib/agent-types'
 import { AGENT_DRAW, STATS_OVERLAY } from '@/lib/canvas-constants'
 import { getStateColor } from '@/lib/colors'
-import { getHexagonTexture, hexagonPoints } from './pixi-app'
+import { getHexagonTexture, hexagonPoints, getBrandTexture, BRAND_BAKE_RADIUS } from './pixi-app'
 import { GlyphAtlas } from './glyph-atlas'
 
 /** Persistent state for one agent's display objects. */
 interface AgentEntry {
   /** Root container for this agent. */
   container: Container
-  /** Circle body sprite. */
+  /** Hexagon body sprite. */
   body: Sprite
+  /** Brand overlay sprite (Claude spark / OpenAI logomark), tinted by state. */
+  brand: Sprite
+  /** Last-applied brand cache key (runtime|color) — avoid texture swap when unchanged. */
+  lastBrandKey: string
   /** Selection ring graphics. */
   selectionRing: Graphics
   /** Hover halo graphics. */
@@ -129,6 +133,21 @@ export class AgentsLayer {
       const bodyScale = (radius * 0.9) / 16
       entry.body.scale.set(bodyScale)
       entry.body.tint = tint
+
+      // ── Brand overlay (Claude spark / OpenAI logomark) ──────────────
+      // Tinted by state color and shadow-blurred at bake time, so the
+      // texture cache key is `${runtime}|${color}`. Sprite scale converts
+      // BRAND_BAKE_RADIUS to per-agent radius; matches Canvas2D's
+      // r*sparkScale on-screen size.
+      const runtime = agent.runtime ?? 'claude'
+      const brandColor = color + '90' // alpha-90 to match drawAgentBrand call site
+      const brandKey = `${runtime}|${brandColor}`
+      if (brandKey !== entry.lastBrandKey) {
+        entry.brand.texture = getBrandTexture(runtime, brandColor)
+        entry.lastBrandKey = brandKey
+      }
+      entry.brand.scale.set(radius / BRAND_BAKE_RADIUS)
+      entry.brand.visible = true
 
       // ── Selection ring (hexagonal) ──────────────────────────────────
       entry.selectionRing.visible = isSelected
@@ -237,11 +256,19 @@ export class AgentsLayer {
     container.label = `agent-${agentId}`
     container.eventMode = 'static'
 
-    // Body circle
+    // Body hexagon
     const body = new Sprite(this.bodyTexture)
     body.anchor.set(0.5)
     body.label = 'body'
     container.addChild(body)
+
+    // Brand overlay (Claude spark / OpenAI logomark) — texture set in update()
+    // because it depends on agent.runtime + state color, both unknown at create.
+    const brand = new Sprite()
+    brand.anchor.set(0.5)
+    brand.label = 'brand'
+    brand.visible = false
+    container.addChild(brand)
 
     // Selection ring
     const selectionRing = new Graphics()
@@ -266,6 +293,8 @@ export class AgentsLayer {
     return {
       container,
       body,
+      brand,
+      lastBrandKey: '',
       selectionRing,
       hoverHalo,
       labelSprite: null,

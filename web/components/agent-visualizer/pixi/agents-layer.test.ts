@@ -84,6 +84,8 @@ vi.mock('pixi.js', () => {
 vi.mock('./pixi-app', () => ({
   getCircleTexture: () => ({ destroy: () => {} }),
   getHexagonTexture: () => ({ destroy: () => {} }),
+  getBrandTexture: () => ({ destroy: () => {} }),
+  BRAND_BAKE_RADIUS: 64,
   hexagonPoints: (radius: number) => {
     const pts: number[] = []
     for (let i = 0; i < 6; i++) {
