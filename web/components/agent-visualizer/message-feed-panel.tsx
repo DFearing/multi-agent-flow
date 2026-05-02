@@ -33,6 +33,15 @@ const MESSAGE_TRUNCATE_MAX = 120
 
 const MESSAGE_GAP = 4
 
+/** Conversation message decorated with a duplicate-collapse count. The
+ *  feed renders one row per consecutive run of identical messages and
+ *  shows ×N when count > 1. */
+interface DedupedMessage extends ConversationMessage {
+  agentId: string
+  count: number
+  lastTimestamp: number
+}
+
 // mergeByTimestamp imported from @/lib/sort-utils
 
 // ─── Main component ─────────────────────────────────────────────────────────
@@ -155,11 +164,40 @@ export function MessageFeedPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded ? conversations : null, expanded, activeTab, agentKey])
 
-  // Virtual list with auto-scroll
+  // Collapse runs of consecutive identical messages — same agent, same role,
+  // same content text — into a single row with a count badge. Tools and
+  // workers often spam the same line repeatedly; the deduped view keeps the
+  // feed scannable. Cheap to recompute since it's a single linear pass over
+  // an already-cached array.
+  const dedupedMessages = useMemo<readonly DedupedMessage[]>(() => {
+    if (messages.length === 0) return []
+    const out: DedupedMessage[] = []
+    for (const msg of messages) {
+      const last = out[out.length - 1]
+      if (
+        last
+        && last.agentId === msg.agentId
+        && last.type === msg.type
+        && last.content === msg.content
+      ) {
+        // Merge this duplicate into the previous entry. We track lastTimestamp
+        // separately so the count badge stays close to the latest occurrence
+        // visually but the row's primary timestamp (sort key) doesn't shift.
+        last.count++
+        last.lastTimestamp = msg.timestamp
+      } else {
+        out.push({ ...msg, count: 1, lastTimestamp: msg.timestamp })
+      }
+    }
+    return out
+  }, [messages])
+
+  // Virtual list with auto-scroll — operate on the deduped feed so collapsed
+  // runs don't blow up the height/measure cache.
   const {
     visibleItems, totalHeight, offsetTop,
     handleScroll, measureRef,
-  } = useVirtualList(messages, logRef, { gap: MESSAGE_GAP, autoScroll: true })
+  } = useVirtualList(dedupedMessages, logRef, { gap: MESSAGE_GAP, autoScroll: true })
 
   // Track unread messages per agent tab
   useEffect(() => {
@@ -321,6 +359,7 @@ export function MessageFeedPanel({
                         showAgent={activeTab === 'all'}
                         isSelected={selectedAgentId === msg.agentId}
                         sessionDot={sessionDot}
+                        repeatCount={msg.count}
                         onClick={() => { onAgentClick(msg.agentId); setExpanded(false) }}
                       />
                     </div>
@@ -375,7 +414,7 @@ const MESSAGE_LINE_CLAMP = 3
 // the "more" toggle on borderline messages.
 const APPROX_CHARS_PER_LINE = 50
 
-function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessionDot, onClick }: {
+function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessionDot, repeatCount, onClick }: {
   message: ConversationMessage
   agentId: string
   agentName: string
@@ -384,6 +423,10 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
   /** Per-session accent color, rendered as a small dot in the header. Null
    *  when there's only one session (or the parent didn't pass agentToSession). */
   sessionDot: string | null
+  /** Number of consecutive identical messages collapsed into this row. >1
+   *  renders a "×N" badge so the user can see something repeated rather
+   *  than guess from a sparser feed. */
+  repeatCount?: number
   onClick: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -433,6 +476,24 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessio
         {showAgent && (
           <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
             {agentName}
+          </span>
+        )}
+        {repeatCount && repeatCount > 1 && (
+          <span
+            title={`This message appeared ${repeatCount} times in a row`}
+            className="text-[9px] font-mono"
+            style={{
+              marginLeft: 'auto',
+              padding: '0 5px',
+              borderRadius: 8,
+              background: role.text + '22',
+              color: role.text,
+              fontWeight: 600,
+              letterSpacing: '0.02em',
+              flexShrink: 0,
+            }}
+          >
+            ×{repeatCount}
           </span>
         )}
       </div>
