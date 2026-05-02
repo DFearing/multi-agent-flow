@@ -18,9 +18,7 @@ import { useSessionStatsDispatch, type SessionStats } from './session-stats-prov
 import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
 import type { EffectToggles } from '@/hooks/use-perf-settings'
 
-/** Cached once at module load — true when `?renderer=pixi` is present. */
-const USE_PIXI_RENDERER = typeof window !== 'undefined'
-  && new URLSearchParams(window.location.search).get('renderer') === 'pixi'
+import { IS_PIXI_RENDERER as USE_PIXI_RENDERER } from '@/lib/renderer-mode'
 
 /** Stable empty-events sentinel — keeps the externalEvents prop reference
  *  identical across idle renders so useAgentSimulation's animate callback
