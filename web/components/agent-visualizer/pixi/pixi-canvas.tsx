@@ -24,6 +24,7 @@ import { ToolCallsLayer } from './tool-calls-layer'
 import { DiscoveriesLayer } from './discoveries-layer'
 import { BubblesLayer } from './bubbles-layer'
 import { ParticlesLayer } from './particles-layer'
+import { PixiBloomFilter } from './bloom-filter'
 import { applyCameraTransform } from './camera'
 
 interface CanvasProps {
@@ -77,6 +78,7 @@ export function PixiCanvas({
   const discoveriesLayerRef = useRef<DiscoveriesLayer | null>(null)
   const bubblesLayerRef = useRef<BubblesLayer | null>(null)
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
+  const bloomFilterRef = useRef<PixiBloomFilter | null>(null)
   const worldRef = useRef<Container | null>(null)
   const animRef = useRef<number>(0)
   const timeRef = useRef(0)
@@ -262,6 +264,11 @@ export function PixiCanvas({
       world.addChild(particlesLayer.container)
       particlesLayerRef.current = particlesLayer
 
+      // Bloom filter — stage-level post-processing
+      const bloomFilter = new PixiBloomFilter(0.6)
+      app.stage.filters = [bloomFilter.filter]
+      bloomFilterRef.current = bloomFilter
+
       // ── Animation loop ─────────────────────────────────────────────
       // Uses its own rAF for now. Follow-up PR will consolidate to the
       // shared app.ticker once all layers are migrated.
@@ -368,6 +375,10 @@ export function PixiCanvas({
       if (particlesLayerRef.current) {
         particlesLayerRef.current.destroy()
         particlesLayerRef.current = null
+      }
+      if (bloomFilterRef.current) {
+        bloomFilterRef.current.dispose()
+        bloomFilterRef.current = null
       }
       worldRef.current = null
       if (localApp) {
