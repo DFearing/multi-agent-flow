@@ -23,16 +23,16 @@ export function AgentChatPanel({
   conversation,
   onClose,
 }: ChatPanelProps) {
-  const { ref: logRef } = useAutoScroll(conversation.length, visible)
+  const { ref: logRef, handleScroll } = useAutoScroll(conversation.length, visible)
 
   // Compute default rect on client only
   const [defaultRect] = useState(() => {
-    if (typeof window === 'undefined') return { x: 800, y: 400, w: CARD.chat.width, h: CARD.chat.maxHeight }
+    if (typeof window === 'undefined') return { x: 800, y: 400, w: CARD.chat.width, h: CARD.chat.maxHeight + 24 }
     return {
-      x: window.innerWidth - CARD.chat.width - 20,
-      y: window.innerHeight - CARD.chat.maxHeight - 80,
+      x: window.innerWidth - CARD.chat.width - 12,
+      y: window.innerHeight - (CARD.chat.maxHeight + 24) - 64,
       w: CARD.chat.width,
-      h: CARD.chat.maxHeight,
+      h: CARD.chat.maxHeight + 24,
     }
   })
 
@@ -45,11 +45,13 @@ export function AgentChatPanel({
       visible={visible}
       title={`${agentName.toUpperCase()} - ${agentState}`}
       onClose={onClose}
+      showHandle={false}
     >
       <div className="flex flex-col h-full p-2">
         {/* Messages */}
         <div
           ref={logRef}
+          onScroll={handleScroll}
           className="flex-1 overflow-y-auto space-y-1.5"
           style={{ scrollbarWidth: 'thin', scrollbarColor: `${COLORS.scrollbarThumb} transparent` }}
         >

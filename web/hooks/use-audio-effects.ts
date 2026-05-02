@@ -60,5 +60,14 @@ export function useAudioEffects(
     }
   }, [])
 
-  return { isMuted, seekingRef, handleToggleMute }
+  // UI feedback sounds for top-bar button clicks. Reuses the existing tool-click
+  // tones — 'save' = higher positive click, 'reset' = lower neutral click.
+  const playUiClick = useCallback((variant: 'save' | 'reset') => {
+    const engine = audioRef.current
+    if (!engine) return
+    if (variant === 'save') engine.playToolEnd()
+    else engine.playToolStart()
+  }, [])
+
+  return { isMuted, seekingRef, handleToggleMute, playUiClick }
 }

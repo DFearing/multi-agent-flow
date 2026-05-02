@@ -5,7 +5,10 @@ import { useAgentSimulation } from "@/hooks/use-agent-simulation"
 import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
-import { AgentCanvas } from "./canvas"
+import { SessionCanvasPanel } from "./session-canvas-panel"
+import { SessionStatsProvider } from "./session-stats-provider"
+import { CostSummaryPanel } from "./cost-summary-panel"
+import { AgentNamesProvider } from "@/hooks/use-agent-names"
 import { ControlBar } from "./control-bar"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
@@ -30,14 +33,30 @@ import { usePanelLayout } from "@/hooks/use-panel-layout"
 export function AgentVisualizer() {
   return (
     <PanelLayoutProvider>
-      <AgentVisualizerInner />
+      <SessionStatsProvider>
+        <AgentNamesProvider>
+          <AgentVisualizerInner />
+        </AgentNamesProvider>
+      </SessionStatsProvider>
     </PanelLayoutProvider>
   )
 }
 
 function AgentVisualizerInner() {
   const bridge = useVSCodeBridge()
-  const { resetLayout } = usePanelLayout()
+  const { resetLayout, instanceId, isFreshInstance, hostId, hostNotFound } = usePanelLayout()
+
+  // Fade-out toast on mount: brief identifier on page load. Gated on a
+  // useEffect-set flag so SSR (which doesn't know the real session id)
+  // doesn't mismatch the client's first render.
+  const [showInstanceToast, setShowInstanceToast] = useState(false)
+  useEffect(() => {
+    setShowInstanceToast(true)
+    const t = setTimeout(() => setShowInstanceToast(false), 4500)
+    return () => clearTimeout(t)
+  }, [])
+
+  if (hostNotFound) return <HostNotFoundScreen hostId={hostId} />
 
   const {
     frameRef,
@@ -74,23 +93,62 @@ function AgentVisualizerInner() {
 
   const selection = useSelectionState({ agents, toolCalls, discoveries })
 
-  const [showStats, setShowStats] = useState(false)
+  const [showStats, setShowStats] = useState(true)
   const [showHexGrid, setShowHexGrid] = useState(true)
   const [showCostOverlay, setShowCostOverlay] = useState(false)
+  const [showCostPanel, setShowCostPanel] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
+  const [detailCardHidden, setDetailCardHidden] = useState(false)
+
+  // When the user selects a different agent, re-show the detail card.
+  useEffect(() => {
+    if (selection.selectedAgentId) setDetailCardHidden(false)
+  }, [selection.selectedAgentId])
+
+  // Sync toggle state with cross-instance send/receive: those panels are gated
+  // by `visible` props above FloatingPanel, so the panel-layout `hidden` flag
+  // alone isn't enough — the parent's toggle must flip too.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onShow = (e: Event) => {
+      const id = (e as CustomEvent<{ panelId: string }>).detail.panelId
+      if (id === 'session-transcript') setShowTranscript(true)
+      else if (id === 'file-attention') setShowFileAttention(true)
+      else if (id === 'timeline') setShowTimeline(true)
+    }
+    const onHide = (e: Event) => {
+      const id = (e as CustomEvent<{ panelId: string }>).detail.panelId
+      if (id === 'session-transcript') setShowTranscript(false)
+      else if (id === 'file-attention') setShowFileAttention(false)
+      else if (id === 'timeline') setShowTimeline(false)
+    }
+    window.addEventListener('agent-flow:show-panel', onShow)
+    window.addEventListener('agent-flow:hide-panel', onHide)
+    return () => {
+      window.removeEventListener('agent-flow:show-panel', onShow)
+      window.removeEventListener('agent-flow:hide-panel', onHide)
+    }
+  }, [])
 
   // Independent panel toggling — each panel can be open simultaneously
   const togglePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
     if (panel === 'files') setShowFileAttention(prev => !prev)
     else if (panel === 'transcript') setShowTranscript(prev => !prev)
-    else if (panel === 'cost') setShowCostOverlay(prev => !prev)
+    else if (panel === 'cost') setShowCostOverlay(prev => {
+      // $Cost button toggles canvas labels AND opens the cost-summary panel.
+      // The panel can be closed independently via its ✕ without affecting
+      // labels; clicking $Cost again turns labels off.
+      const next = !prev
+      setShowCostPanel(next)
+      return next
+    })
   }, [])
   const [zoomToFitTrigger, setZoomToFitTrigger] = useState(0)
 
   const [isReviewing, setIsReviewing] = useState(false)
-  const { isMuted, seekingRef, handleToggleMute } = useAudioEffects(agents, toolCalls, isReviewing)
+  const { isMuted, seekingRef, handleToggleMute, playUiClick } = useAudioEffects(agents, toolCalls, isReviewing)
 
   // Auto-play on mount
   useEffect(() => {
@@ -260,9 +318,55 @@ function AgentVisualizerInner() {
 
   const isEmpty = agents.size === 0 && !bridge.useMockData
 
+  // Slot assignment: each live session gets the lowest unused slot, stable for
+  // the lifetime of this page load. Slot rects persist in localStorage as
+  // `canvas-slot-<N>`, so positions are remembered across reloads even though
+  // session UUIDs change with each Claude Code restart.
+  const sessionSlotsRef = useRef<Map<string, number>>(new Map())
+  const sessionSlots = useMemo(() => {
+    const map = sessionSlotsRef.current
+    const liveIds = new Set(bridge.sessions.map(s => s.id))
+    for (const id of [...map.keys()]) {
+      if (!liveIds.has(id)) map.delete(id)
+    }
+    for (const session of bridge.sessions) {
+      if (map.has(session.id)) continue
+      const used = new Set(map.values())
+      let n = 1
+      while (used.has(n)) n++
+      map.set(session.id, n)
+    }
+    return new Map(map)
+  }, [bridge.sessions])
+
   return (
     <OpenFileProvider value={bridge.isVSCode ? openFile : null}>
     <div className="h-screen w-screen relative overflow-hidden" style={{ background: COLORS.void }}>
+      {/* Instance toast: brief identifier on page load. */}
+      {showInstanceToast && (
+        <div
+          style={{
+            position: 'fixed', top: 8, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 99998, pointerEvents: 'none',
+            padding: '6px 12px',
+            background: 'rgba(10, 15, 30, 0.85)',
+            border: `1px solid ${COLORS.holoBorder12}`,
+            borderRadius: 6,
+            fontFamily: "'SF Mono', 'Fira Code', monospace",
+            fontSize: 11,
+            color: COLORS.textPrimary,
+            transition: 'opacity 600ms ease',
+            opacity: 0.92,
+          }}
+        >
+          {hostId
+            ? <>Joined session: <span style={{ color: COLORS.holoBright }}>{instanceId}</span> · host: <span style={{ color: COLORS.holoBright }}>{hostId}</span></>
+            : isFreshInstance
+              ? <>New session: <span style={{ color: COLORS.holoBright }}>{instanceId}</span></>
+              : <>Session: <span style={{ color: COLORS.holoBright }}>{instanceId}</span></>}
+        </div>
+      )}
+
       {/* Empty state when no demo and no live data */}
       {isEmpty && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
@@ -273,25 +377,42 @@ function AgentVisualizerInner() {
         </div>
       )}
 
-      {/* Canvas fills everything */}
-      <AgentCanvas
-        simulationRef={frameRef}
-        selectedAgentId={selection.selectedAgentId}
-        hoveredAgentId={selection.hoveredAgentId}
-        showStats={showStats}
-        showHexGrid={showHexGrid}
-        zoomToFitTrigger={zoomToFitTrigger}
-        pauseAutoFit={selection.contextMenu !== null}
-        onAgentClick={selection.handleAgentClick}
-        onAgentHover={selection.setHoveredAgentId}
-        onAgentDrag={updateAgentPosition}
-        onContextMenu={selection.handleContextMenu}
-        onToolCallClick={selection.handleToolCallClick}
-        selectedToolCallId={selection.selectedToolCallId}
-        onDiscoveryClick={selection.handleDiscoveryClick}
-        selectedDiscoveryId={selection.selectedDiscoveryId}
-        showCostOverlay={showCostOverlay}
-      />
+      {/* One draggable canvas per active session, mapped onto persistent slots.
+          Slot rects (`canvas-slot-N`) are remembered in localStorage; sessions
+          are assigned the lowest unused slot in arrival order, so positions
+          stick across Claude Code restarts (which mint new session UUIDs). */}
+      {bridge.sessions.map(session => {
+        const slot = sessionSlots.get(session.id) ?? 0
+        if (slot === 0) return null
+        return (
+          <SessionCanvasPanel
+            key={session.id}
+            sessionId={session.id}
+            sessionLabel={session.label ?? session.id.slice(0, 8)}
+            slot={slot}
+            selectedAgentId={selection.selectedAgentId}
+            hoveredAgentId={selection.hoveredAgentId}
+            selectedToolCallId={selection.selectedToolCallId}
+            selectedDiscoveryId={selection.selectedDiscoveryId}
+            showStats={showStats}
+            showHexGrid={showHexGrid}
+            showCostOverlay={showCostOverlay}
+            zoomToFitTrigger={zoomToFitTrigger}
+            pauseAutoFit={selection.contextMenu !== null}
+            getSessionEventLog={bridge.getSessionEventLog}
+            onAgentClick={(id, sessionId) => {
+              if (sessionId !== bridge.selectedSessionId) bridge.selectSession(sessionId)
+              if (selection.selectedAgentId) selection.clearAgent()
+              void id
+            }}
+            onAgentHover={selection.setHoveredAgentId}
+            onAgentDrag={updateAgentPosition}
+            onContextMenu={selection.handleContextMenu}
+            onToolCallClick={selection.handleToolCallClick}
+            onDiscoveryClick={selection.handleDiscoveryClick}
+          />
+        )
+      })}
 
       {/* Message feed panel (top-left) */}
       <MessageFeedPanel
@@ -301,11 +422,12 @@ function AgentVisualizerInner() {
         selectedAgentId={selection.selectedAgentId}
       />
 
-      {/* Agent detail card (floating panel) */}
-      {selectedAgent && selection.selectedAgentWorldPos && (
+      {/* Agent detail card (floating panel) — closeable independently of the chat. */}
+      {selectedAgent && selection.selectedAgentWorldPos && !detailCardHidden && (
         <AgentDetailCard
           agent={selectedAgent}
-          onClose={selection.clearAgent}
+          sessionId={bridge.selectedSessionId ?? ''}
+          onClose={() => setDetailCardHidden(true)}
         />
       )}
 
@@ -399,6 +521,12 @@ function AgentVisualizerInner() {
         onClose={() => setShowTimeline(false)}
       />
 
+      {/* Cost summary panel — aggregates across all session canvases. */}
+      <CostSummaryPanel
+        visible={showCostPanel}
+        onClose={() => setShowCostPanel(false)}
+      />
+
       {/* Top bar: session tabs + info/controls */}
       <TopBar
         sessions={bridge.sessions}
@@ -418,8 +546,63 @@ function AgentVisualizerInner() {
         onTogglePanel={togglePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}
+        onUiClick={playUiClick}
       />
     </div>
     </OpenFileProvider>
+  )
+}
+
+function HostNotFoundScreen({ hostId }: { hostId: string | null }) {
+  const onOpenNew = () => {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('host')
+    url.searchParams.delete('session')
+    window.location.href = url.toString()
+  }
+  return (
+    <div
+      className="h-screen w-screen flex items-center justify-center"
+      style={{ background: COLORS.void, fontFamily: "'SF Mono', 'Fira Code', monospace" }}
+    >
+      <div
+        style={{
+          padding: '24px 28px',
+          background: 'rgba(10, 15, 30, 0.85)',
+          border: `1px solid ${COLORS.holoBorder12}`,
+          borderRadius: 8,
+          color: COLORS.textPrimary,
+          maxWidth: 440,
+          textAlign: 'center',
+        }}
+      >
+        <div style={{ fontSize: 12, color: COLORS.holoBase, marginBottom: 8, letterSpacing: 1 }}>
+          HOST NOT FOUND
+        </div>
+        <div style={{ fontSize: 13, marginBottom: 6 }}>
+          No layout exists for host{' '}
+          <span style={{ color: COLORS.holoBright }}>{hostId ?? '—'}</span>.
+        </div>
+        <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 18 }}>
+          The host window may have been closed or hard-reset.
+        </div>
+        <button
+          onClick={onOpenNew}
+          style={{
+            padding: '8px 16px',
+            background: 'rgba(100, 200, 255, 0.12)',
+            border: `1px solid ${COLORS.holoBorder12}`,
+            color: COLORS.textPrimary,
+            borderRadius: 4,
+            cursor: 'pointer',
+            fontSize: 12,
+            fontFamily: 'inherit',
+          }}
+        >
+          Open new session
+        </button>
+      </div>
+    </div>
   )
 }

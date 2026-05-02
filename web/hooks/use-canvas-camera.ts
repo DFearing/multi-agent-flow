@@ -115,7 +115,10 @@ export function useCanvasCamera({
         if (visibleCount > 0) {
           maxX = Math.max(maxX, agent.x + r + 14 + BUBBLE_MAX_W * 0.4)
           minX = Math.min(minX, agent.x - r - BUBBLE_MAX_W * 0.2)
-          const stackH = visibleCount * 46
+          // Auto-fit only accounts for the topmost bubble. The full stack still
+          // draws, but the camera doesn't zoom out to encompass dozens of them
+          // — keeps each session canvas tight on the agent.
+          const stackH = 60
           minY = Math.min(minY, agent.y - 20)
           maxY = Math.max(maxY, agent.y - 20 + stackH)
         }
@@ -146,12 +149,28 @@ export function useCanvasCamera({
     const padding = ANIM.viewportPadding
     const boundsW = maxX - minX + padding * 2
     const boundsH = maxY - minY + padding * 2
-    const centerX = (minX + maxX) / 2
-    const centerY = (minY + maxY) / 2
     const scale = Math.min(dimensions.width / boundsW, dimensions.height / boundsH, 2)
+
+    // Center the camera on the agent itself (main agent if present, otherwise
+    // any agent), instead of the bounding-box center. Keeps the node anchored
+    // in view as it moves and as bubbles/tools come and go.
+    let anchorX = (minX + maxX) / 2
+    let anchorY = (minY + maxY) / 2
+    let mainAgentX: number | null = null
+    let mainAgentY: number | null = null
+    let firstAgentX: number | null = null
+    let firstAgentY: number | null = null
+    for (const [, a] of agents) {
+      if (focusScope && !focusScope.has(a.id)) continue
+      if (firstAgentX === null) { firstAgentX = a.x; firstAgentY = a.y }
+      if (a.isMain) { mainAgentX = a.x; mainAgentY = a.y; break }
+    }
+    if (mainAgentX !== null && mainAgentY !== null) { anchorX = mainAgentX; anchorY = mainAgentY }
+    else if (firstAgentX !== null && firstAgentY !== null) { anchorX = firstAgentX; anchorY = firstAgentY }
+
     const result = {
-      x: dimensions.width / 2 - centerX * scale,
-      y: dimensions.height / 2 - centerY * scale,
+      x: dimensions.width / 2 - anchorX * scale,
+      y: dimensions.height / 2 - anchorY * scale,
       scale,
     }
     fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result }

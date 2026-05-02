@@ -80,7 +80,8 @@ export function drawContextComposition(
   ctx.fillStyle = COLORS.textMuted
   ctx.font = `${CONTEXT_BAR.fontSize}px monospace`
   ctx.textAlign = 'center'
-  ctx.fillText(`${formatTokens(total)} / ${formatTokens(agent.tokensMax)} tokens`, agent.x, barY + barHeight + CONTEXT_BAR.labelPadding)
+  const pct = Math.round((total / agent.tokensMax) * 100)
+  ctx.fillText(`${formatTokens(total)} / ${formatTokens(agent.tokensMax)} · ${pct}%`, agent.x, barY + barHeight + CONTEXT_BAR.labelPadding)
 
   // Segments
   const segments = contextSegments(bd)

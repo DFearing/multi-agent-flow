@@ -43,8 +43,8 @@ export const COLORS = {
   // UI Chrome
   nodeInterior: 'rgba(10, 15, 40, 0.5)',
   textPrimary: '#aaeeff',
-  textDim: '#66ccff90',
-  textMuted: '#66ccff50',
+  textDim: '#66ccffcc',
+  textMuted: '#66ccff90',
 
   // Glass card
   glassBg: 'rgba(10, 15, 30, 0.7)',
@@ -67,7 +67,8 @@ export const COLORS = {
   // Toggle button states
   toggleActive: 'rgba(100, 200, 255, 0.15)',
   toggleInactive: 'rgba(100, 200, 255, 0.05)',
-  toggleBorder: 'rgba(100, 200, 255, 0.1)',
+  toggleHover: 'rgba(100, 200, 255, 0.18)',
+  toggleBorder: 'rgba(100, 200, 255, 0.18)',
 
   // Live indicator
   liveDot: '#ff4444',

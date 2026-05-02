@@ -57,12 +57,12 @@ export function SessionTranscriptPanel({
   })
 
   const [defaultRect] = useState(() => {
-    if (typeof window === 'undefined') return { x: 600, y: 48, w: CARD.transcript.width, h: 600 }
+    if (typeof window === 'undefined') return { x: 600, y: 72, w: CARD.transcript.width, h: 600 }
     return {
-      x: window.innerWidth - CARD.transcript.width - 20,
-      y: 48,
+      x: window.innerWidth - CARD.transcript.width,
+      y: 72,
       w: CARD.transcript.width,
-      h: window.innerHeight - 100,
+      h: window.innerHeight - 72,
     }
   })
 

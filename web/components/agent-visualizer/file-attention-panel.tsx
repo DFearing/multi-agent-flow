@@ -16,8 +16,8 @@ interface FileAttentionPanelProps {
 
 export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile }: FileAttentionPanelProps) {
   const [defaultRect] = useState(() => {
-    if (typeof window === 'undefined') return { x: 800, y: 108, w: 260, h: 480 }
-    return { x: window.innerWidth - 280, y: 108, w: 260, h: 480 }
+    if (typeof window === 'undefined') return { x: 800, y: 72, w: 260, h: 588 }
+    return { x: window.innerWidth - 260 - 12, y: 72, w: 260, h: window.innerHeight - 92 }
   })
 
   const files = Array.from(fileAttention.values())
@@ -34,6 +34,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
       visible={visible}
       title="FILE ATTENTION"
       onClose={onClose}
+      showHandle={false}
     >
       <div className="flex flex-col h-full p-3 pt-1">
         {/* File list */}

@@ -16,6 +16,10 @@ interface InteractionCallbacks {
   onContextMenu: (e: React.MouseEvent, type: 'agent' | 'edge' | 'canvas', id?: string) => void
   onToolCallClick?: (toolCallId: string | null) => void
   onDiscoveryClick?: (discoveryId: string | null) => void
+  /** Fired on double-click on an agent node. localX/localY are pixels relative
+   *  to the canvas container so the consumer can place inline UI (e.g. rename
+   *  input) at the click point. */
+  onAgentDoubleClick?: (agentId: string, localX: number, localY: number) => void
 }
 
 interface InteractionOptions {
@@ -202,9 +206,24 @@ export function useCanvasInteraction({
     return () => canvas.removeEventListener('wheel', handler)
   }, [mainCanvasRef])
 
-  const handleDoubleClick = useCallback(() => {
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    // Double-click on an agent → consumer-defined behavior (rename inline).
+    // Double-click on empty space → zoom-to-fit.
+    const pos = screenToCanvas(e.clientX, e.clientY)
+    const agentId = findAgentAt(pos.x, pos.y)
+    const onAgentDoubleClick = drawPropsRef.current.onAgentDoubleClick
+    if (agentId && onAgentDoubleClick) {
+      const canvas = mainCanvasRef.current
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect()
+        onAgentDoubleClick(agentId, e.clientX - rect.left, e.clientY - rect.top)
+      } else {
+        onAgentDoubleClick(agentId, 0, 0)
+      }
+      return
+    }
     doZoomToFit()
-  }, [doZoomToFit])
+  }, [screenToCanvas, findAgentAt, drawPropsRef, doZoomToFit, mainCanvasRef])
 
   const handleContextMenuEvent = useCallback((e: React.MouseEvent) => {
     e.preventDefault()

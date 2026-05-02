@@ -101,12 +101,12 @@ function LiveControlBar({
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
 
   const [defaultRect] = useState(() => {
-    if (typeof window === 'undefined') return { x: 100, y: 700, w: 500, h: 56 }
+    if (typeof window === 'undefined') return { x: 4, y: 700, w: 1272, h: 72 }
     return {
-      x: Math.max(16, (window.innerWidth - 500) / 2),
-      y: window.innerHeight - 72,
-      w: 500,
-      h: 56,
+      x: 4,
+      y: window.innerHeight - 72 - 4,
+      w: window.innerWidth - 8,
+      h: 72,
     }
   })
 
@@ -122,6 +122,7 @@ function LiveControlBar({
       defaultRect={defaultRect}
       minW={320}
       minH={48}
+      showHandle={false}
     >
       <div className="px-5 py-3 flex items-center gap-3 h-full">
         {/* LIVE badge */}
@@ -191,12 +192,12 @@ function ReviewControlBar({
   const progress = totalDuration > 0 ? currentTime / totalDuration : 0
 
   const [defaultRect] = useState(() => {
-    if (typeof window === 'undefined') return { x: 100, y: 700, w: 600, h: 64 }
+    if (typeof window === 'undefined') return { x: 4, y: 700, w: 1272, h: 80 }
     return {
-      x: Math.max(16, (window.innerWidth - 600) / 2),
-      y: window.innerHeight - 80,
-      w: 600,
-      h: 64,
+      x: 4,
+      y: window.innerHeight - 80 - 4,
+      w: window.innerWidth - 8,
+      h: 80,
     }
   })
 
@@ -225,6 +226,7 @@ function ReviewControlBar({
       defaultRect={defaultRect}
       minW={360}
       minH={48}
+      showHandle={false}
     >
       <div className="px-5 py-3 flex items-center gap-3 h-full">
         {/* Play/Pause */}

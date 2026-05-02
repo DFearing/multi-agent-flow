@@ -33,6 +33,8 @@ interface BridgeHookResult {
   sessionsWithActivity: Set<string>
   /** Remove a session from the list */
   removeSession: (sessionId: string) => void
+  /** Read the full event log for a specific session (used by per-session canvases). */
+  getSessionEventLog: (sessionId: string) => readonly SimulationEvent[]
 }
 
 /**
@@ -132,9 +134,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       const selected = selectedSessionIdRef.current
       if (selected && event.sessionId === selected && !sessionSwitchPendingRef.current) {
         pendingEventsRef.current.push(simEvent)
-        setEventVersion(v => v + 1)
       } else if (event.sessionId && event.sessionId !== selected) {
-        // Track background activity for unselected sessions
         setSessionsWithActivity(prev => {
           if (prev.has(event.sessionId!)) return prev
           const next = new Set(prev)
@@ -142,6 +142,9 @@ export function useVSCodeBridge(): BridgeHookResult {
           return next
         })
       }
+      // Bump eventVersion on EVERY event so multi-canvas consumers re-render
+      // and pull new entries from their session's event log.
+      setEventVersion(v => v + 1)
 
       // Re-add dismissed sessions when new events arrive
       if (event.sessionId && dismissedSessionsRef.current.has(event.sessionId)) {
@@ -315,5 +318,6 @@ export function useVSCodeBridge(): BridgeHookResult {
     getSessionEventCount,
     sessionsWithActivity,
     removeSession,
+    getSessionEventLog: (sessionId: string) => sessionEventsRef.current.get(sessionId) ?? [],
   }
 }

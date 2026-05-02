@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Agent, Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
@@ -17,11 +17,12 @@ import {
   drawParticles, buildEdgeMap,
   drawToolCalls,
   drawDiscoveries, drawDiscoveryConnections,
-  drawCostLabels, drawCostSummaryPanel,
+  drawCostLabels,
   detectStateChanges as detectStateChangesPure,
-} from './canvas/index'
+} from './canvas/'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { useAgentNames } from '@/hooks/use-agent-names'
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -41,13 +42,48 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  /** Session id this canvas is rendering. Used to scope per-agent name
+   *  overrides so renaming an agent in one session canvas doesn't affect a
+   *  same-id agent in another session canvas. */
+  sessionId?: string
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
+  sessionId,
 }: CanvasProps) {
+  const { names: nameOverrides, setName, getName } = useAgentNames()
+  // Build a session-scoped subset for the per-frame draw patcher (so the
+  // draw-time map only has THIS session's overrides applied to this canvas).
+  const scopedOverrides = useMemo(() => {
+    if (!sessionId) return {}
+    const out: Record<string, string> = {}
+    const prefix = `${sessionId}:`
+    for (const [k, v] of Object.entries(nameOverrides)) {
+      if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v
+    }
+    return out
+  }, [nameOverrides, sessionId])
+  const scopedOverridesRef = useRef(scopedOverrides)
+  scopedOverridesRef.current = scopedOverrides
+
+  // Inline rename: double-click an agent to open an input over the click point.
+  const [renameTarget, setRenameTarget] = useState<{ agentId: string; x: number; y: number } | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const onAgentDoubleClick = useCallback((agentId: string, localX: number, localY: number) => {
+    const initial = (sessionId ? getName(sessionId, agentId) : undefined)
+      ?? simulationRef.current.agents.get(agentId)?.name ?? ''
+    setRenameDraft(initial)
+    setRenameTarget({ agentId, x: localX, y: localY })
+  }, [getName, simulationRef, sessionId])
+  const commitRename = useCallback(() => {
+    if (renameTarget && sessionId) setName(sessionId, renameTarget.agentId, renameDraft)
+    setRenameTarget(null)
+  }, [renameTarget, renameDraft, setName, sessionId])
+  const cancelRename = useCallback(() => setRenameTarget(null), [])
+
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -97,6 +133,7 @@ export function AgentCanvas({
     simTime: sim.currentTime, pauseAutoFit, dimensions,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
     onToolCallClick, onDiscoveryClick,
+    onAgentDoubleClick,
     isDragging: prev?.isDragging ?? false,
   })
   const drawPropsRef = useRef(makeDrawProps())
@@ -176,11 +213,23 @@ export function AgentCanvas({
     if (!ctx) return
 
     try {
-      // Sync simulation data from ref — always fresh, independent of React renders
+      // Sync simulation data from ref — always fresh, independent of React renders.
+      // If the user has set display-name overrides for THIS session, build a
+      // per-frame copy of the agents map with names patched in.
       {
         const s = simulationRef.current
         const p = drawPropsRef.current
-        p.agents = s.agents
+        const overrides = scopedOverridesRef.current
+        if (Object.keys(overrides).length > 0) {
+          const patched = new Map<string, Agent>()
+          for (const [id, agent] of s.agents) {
+            const customName = overrides[id]
+            patched.set(id, customName ? { ...agent, name: customName } : agent)
+          }
+          p.agents = patched
+        } else {
+          p.agents = s.agents
+        }
         p.toolCalls = s.toolCalls
         p.particles = s.particles
         p.edges = s.edges
@@ -282,7 +331,6 @@ export function AgentCanvas({
 
       ctx.restore()
 
-      if (showCostOverlay) drawCostSummaryPanel(ctx, agents, toolCalls)
       if (bloomRef.current) bloomRef.current.apply(canvas, ctx)
 
       // ─── Performance overlay (enabled via ?perf or ?stress) ──────────
@@ -347,6 +395,37 @@ export function AgentCanvas({
         {...handlers}
         className="w-full h-full"
       />
+      {renameTarget && (
+        <input
+          autoFocus
+          value={renameDraft}
+          onChange={e => setRenameDraft(e.target.value)}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter') commitRename()
+            else if (e.key === 'Escape') cancelRename()
+          }}
+          onBlur={commitRename}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+          onDoubleClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            left: renameTarget.x - 80,
+            top: renameTarget.y - 12,
+            width: 160,
+            padding: '4px 6px',
+            fontSize: 11,
+            fontFamily: "'SF Mono', 'Fira Code', monospace",
+            background: 'rgba(10, 15, 30, 0.95)',
+            border: '1px solid rgba(100, 200, 255, 0.4)',
+            borderRadius: 4,
+            color: '#aaeeff',
+            outline: 'none',
+            zIndex: 10,
+          }}
+        />
+      )}
     </div>
   )
 }

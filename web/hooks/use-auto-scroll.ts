@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 
 /**
  * Auto-scrolls a container to the bottom when new items are added.
@@ -16,6 +16,7 @@ export function useAutoScroll(
   const ref = useRef<HTMLDivElement>(null)
   const autoScroll = useRef(true)
   const prevVisible = useRef(false)
+  const prevScrollHeight = useRef(0)
 
   // Auto-scroll on new items (if user hasn't scrolled up)
   useEffect(() => {
@@ -23,6 +24,18 @@ export function useAutoScroll(
       ref.current.scrollTop = ref.current.scrollHeight
     }
   }, [itemCount])
+
+  // Catch the streaming case: the last message grows token-by-token without
+  // changing itemCount. Run on every render and stick to bottom whenever the
+  // scrollable content grew since the last paint.
+  useLayoutEffect(() => {
+    if (!ref.current) return
+    const sh = ref.current.scrollHeight
+    if (sh > prevScrollHeight.current && autoScroll.current) {
+      ref.current.scrollTop = sh
+    }
+    prevScrollHeight.current = sh
+  })
 
   // Scroll to bottom when container becomes visible
   useEffect(() => {

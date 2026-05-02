@@ -34,7 +34,8 @@ export function MessageFeedPanel({
   onAgentClick,
   selectedAgentId,
 }: MessageFeedPanelProps) {
-  const [expanded, setExpanded] = useState(false)
+  const expanded = true
+  const setExpanded = (_: boolean) => {}
   const [activeTab, setActiveTab] = useState<string>('all')
   const [unread, setUnread] = useState<Set<string>>(new Set())
   const logRef = useRef<HTMLDivElement>(null)
@@ -193,7 +194,7 @@ export function MessageFeedPanel({
     return (
       <FloatingPanel
         id="message-feed"
-        defaultRect={{ x: 12, y: 108, w: 340, h: 48 }}
+        defaultRect={{ x: 12, y: 72, w: 320, h: 444 }}
         minW={200}
         minH={40}
       >
@@ -218,7 +219,7 @@ export function MessageFeedPanel({
   return (
     <FloatingPanel
       id="message-feed"
-      defaultRect={{ x: 12, y: 108, w: 340, h: 420 }}
+      defaultRect={{ x: 12, y: 72, w: 320, h: 444 }}
       minW={240}
       minH={120}
       title="MESSAGES"
@@ -339,6 +340,8 @@ function TabButton({ label, active, onClick, color, hasUnread }: {
 
 // ── Message Row ──
 
+const MESSAGE_LINE_CLAMP = 3
+
 function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClick }: {
   message: ConversationMessage
   agentId: string
@@ -348,9 +351,26 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
   onClick: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [isOverflowing, setIsOverflowing] = useState(false)
+  const textRef = useRef<HTMLDivElement>(null)
   const role = ROLE_COLORS[message.type] ?? ROLE_COLORS.assistant
-  const isLong = message.content.length > MESSAGE_TRUNCATE_MAX
-  const displayText = expanded || !isLong ? message.content : message.content.slice(0, MESSAGE_TRUNCATE_MAX) + '...'
+
+  // Detect whether the line-clamped text actually overflows. Re-runs on
+  // panel width changes (line wrapping) and font/zoom changes (visual size).
+  useEffect(() => {
+    if (expanded) { setIsOverflowing(false); return }
+    const el = textRef.current
+    if (!el) return
+    const check = () => {
+      const node = textRef.current
+      if (!node) return
+      setIsOverflowing(node.scrollHeight > node.clientHeight + 1)
+    }
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [message.content, expanded])
 
   return (
     <div
@@ -373,24 +393,36 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
         )}
       </div>
 
-      {/* Content */}
+      {/* Content — line-clamped when collapsed; CSS handles ellipsis only when actually overflowing. */}
       <div
+        ref={textRef}
         className="text-[9px] font-mono leading-relaxed whitespace-pre-wrap break-words"
-        style={{ color: role.text }}
+        style={{
+          color: role.text,
+          ...(expanded ? null : {
+            display: '-webkit-box',
+            WebkitLineClamp: MESSAGE_LINE_CLAMP,
+            WebkitBoxOrient: 'vertical' as const,
+            overflow: 'hidden',
+          }),
+        }}
       >
-        {displayText}
+        {message.content}
       </div>
 
-      {/* Expand/collapse for long messages */}
-      {isLong && (
-        <button
-          className="text-[9px] font-mono mt-0.5 transition-colors"
-          style={{ color: COLORS.textMuted }}
-          onClick={(e) => { e.stopPropagation(); setExpanded(prev => !prev) }}
-        >
-          {expanded ? '▴ less' : '▾ more'}
-        </button>
-      )}
+      {/* Show toggle only if currently overflowing or already expanded. */}
+      {(expanded || isOverflowing) && (() => {
+        const totalLines = message.content.split('\n').length
+        return (
+          <button
+            className="text-[9px] font-mono mt-0.5 transition-colors"
+            style={{ color: COLORS.textMuted }}
+            onClick={(e) => { e.stopPropagation(); setExpanded(prev => !prev) }}
+          >
+            {expanded ? '▴ less' : `▾ more (${totalLines} ${totalLines === 1 ? 'line' : 'lines'})`}
+          </button>
+        )
+      })()}
     </div>
   )
 }
