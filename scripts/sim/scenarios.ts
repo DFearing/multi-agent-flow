@@ -202,35 +202,74 @@ const concurrent: Scenario = {
     )
 
     // Per-session loops. Different cadences so the canvases don't all tick
-    // in lockstep — easier to tell which is which while testing.
+    // in lockstep — easier to tell which is which while testing. Each round
+    // dispatches 3 subagents in parallel so the visualizer always shows
+    // active sub-trees under every main agent.
     await Promise.all(
       sessions.map(async (s, i) => {
         await s.user(TASKS[i % TASKS.length])
         await s.wait(300 + i * 200)
-        await s.thinking('Planning the approach.')
+        await s.thinking('Planning — I will dispatch parallel subagents to inspect the code.')
 
-        let n = 0
+        let round = 0
         const baseGap = 1500 + i * 400
         // eslint-disable-next-line no-constant-condition
         while (true) {
           await s.tool(
             'Read',
-            { file_path: `src/session-${i + 1}/file-${n}.ts` },
-            `read file-${n} — ${30 + (n % 80)} lines`,
-            { durationMs: 700 + (n % 5) * 150 },
+            { file_path: `src/session-${i + 1}/orchestrator-round-${round}.ts` },
+            `read — ${40 + (round % 60)} lines`,
+            { durationMs: 500 + (round % 3) * 200 },
           )
-          n++
-          if (n % 4 === 0) {
-            await s.text(`Progress: processed ${n} files in session ${i + 1}.`)
-          }
-          if (n % 7 === 0) {
-            await s.tool(
-              'Bash',
-              { command: `npm test -- --filter session-${i + 1}` },
-              `12 passed (${(2 + Math.random() * 4).toFixed(1)}s)`,
-              { durationMs: 1800 },
-            )
-          }
+
+          await s.text(`Round ${round + 1}: dispatching 3 subagents.`)
+
+          const [reader, tester, linter] = await Promise.all([
+            s.spawnSubagent(`code-reader-${round}`, 'Scan source for relevant files'),
+            s.spawnSubagent(`test-runner-${round}`, 'Run the affected test suite'),
+            s.spawnSubagent(`lint-checker-${round}`, 'Lint and auto-fix style issues'),
+          ])
+
+          await Promise.all([
+            (async () => {
+              await reader.wait(150)
+              await reader.thinking('Globbing source for relevant files.')
+              await reader.tool('Glob', { pattern: 'src/**/*.ts' }, `${80 + (round % 40)} files`, { durationMs: 400 })
+              await reader.tool('Read', { file_path: `src/module-${round}.ts` }, `module-${round}.ts — 120 lines`, { durationMs: 600 })
+              await reader.text('Read pass complete.')
+              await reader.return(`code-reader: scanned ${80 + (round % 40)} files`)
+            })(),
+            (async () => {
+              await tester.wait(250)
+              await tester.thinking('Running the affected test suite.')
+              await tester.tool(
+                'Bash',
+                { command: `npm test -- --filter session-${i + 1}` },
+                `12 passed (${(2 + Math.random() * 3).toFixed(1)}s)`,
+                { durationMs: 1500 + (round % 3) * 300 },
+              )
+              await tester.text('Tests green.')
+              await tester.return('test-runner: 12 passed')
+            })(),
+            (async () => {
+              await linter.wait(400)
+              await linter.thinking('Running ESLint to find style issues.')
+              await linter.tool(
+                'Bash',
+                { command: 'npx eslint src/' },
+                `${round % 5} warnings, 0 errors`,
+                { durationMs: 1100 + (round % 4) * 200 },
+              )
+              if (round % 3 === 0) {
+                await linter.tool('Edit', { file_path: `src/lint-fix-${round}.ts` }, 'auto-fixed 2 issues', { durationMs: 300 })
+              }
+              await linter.text('Lint pass done.')
+              await linter.return(`lint-checker: ${round % 5} warnings`)
+            })(),
+          ])
+
+          await s.text(`Round ${round + 1} synthesized — 3 subagent reports merged.`)
+          round++
           await s.wait(baseGap)
         }
       }),
