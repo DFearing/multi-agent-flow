@@ -45,11 +45,13 @@ export const DEFAULT_DEV_PORT = 3002
 /** Default SSE relay port (used by dev relay, standalone app, and webview build) */
 export const DEFAULT_RELAY_PORT = 3001
 
-/** Accept CORS requests from any localhost origin during dev — Next.js falls
- *  back to a higher port when 3000 is taken, so a single hard-coded value
- *  would silently break dev. The relay binds to 127.0.0.1 already, so this
- *  pattern is safe (no external origin can reach it). */
-export const DEV_WEB_ORIGIN_PATTERN = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/
+/** Accept CORS requests from any HTTP(S) origin during dev. The relay defaults
+ *  to binding 0.0.0.0 (see scripts/dev-relay.ts) so it's reachable from a Next
+ *  dev page loaded over LAN, Tailscale, or SSH-forward — those origins
+ *  (e.g. `http://192.168.1.5:3000` or `http://laptop.tailnet.ts.net:3000`)
+ *  must satisfy CORS for the SSE connection. Dev-only — the standalone app
+ *  serves the relay from the same origin and doesn't depend on this. */
+export const DEV_WEB_ORIGIN_PATTERN = /^https?:\/\/[^/?#]+$/
 
 /** Returned by HookServer.start() when the port is already in use by another instance */
 export const HOOK_SERVER_NOT_STARTED = -1
