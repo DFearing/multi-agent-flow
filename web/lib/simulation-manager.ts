@@ -39,10 +39,10 @@ import {
   syncPhysics,
   pinNode,
   tickPhysics,
-  applyPhysicsToAgents,
   type PhysicsState,
 } from '@/hooks/simulation/physics'
 import { RingBuffer } from '@/lib/ring-buffer'
+import { PositionBuffer } from '@/lib/position-buffer'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -59,6 +59,9 @@ interface SessionSubState {
   frameState: SimulationState
   /** Physics solver for this session. */
   physics: PhysicsState
+  /** Typed-array position buffer — eliminates per-frame agent object
+   *  allocations during drag and physics ticks. */
+  positions: PositionBuffer
   /** Monotonic block-id counter for timeline entries. */
   blockIdCounter: number
   /** Deferred events from the previous frame (time-slicing). */
@@ -73,6 +76,8 @@ interface SessionSubState {
   pendingEvents: SimulationEvent[]
   /** Disable 1M context window. */
   disable1MContext: boolean
+  /** When true, drive this session from MOCK_SCENARIO (time-based). */
+  useMockData: boolean
 }
 
 // ── Listener type ──────────────────────────────────────────────────────────
@@ -81,10 +86,13 @@ type Listener = () => void
 
 // ── SimulationManager ──────────────────────────────────────────────────────
 
+/** Callback registered by a canvas for per-frame rendering. */
+export type RenderCallback = (timestamp: number) => void
+
 export interface SimulationManager {
   // ── Session lifecycle ───────────────────────────────────────────────────
   /** Register a new session. If it already exists, this is a no-op. */
-  addSession(sessionId: string, opts?: { disable1MContext?: boolean }): void
+  addSession(sessionId: string, opts?: { disable1MContext?: boolean; useMockData?: boolean }): void
   /** Remove a session and clean up its state. */
   removeSession(sessionId: string): void
   /** Check whether a session is registered. */
@@ -110,6 +118,12 @@ export interface SimulationManager {
   saveSnapshot(sessionId: string): { simState: SimulationState; blockId: number }
   restoreSnapshot(sessionId: string, snapshot: { simState: SimulationState; blockId: number }): void
 
+  // ── Render registry ────────────────────────────────────────────────────
+  /** Register a render callback. Called every frame after all session ticks.
+   *  Returns an unregister function. Callbacks are called in registration
+   *  order. */
+  registerRender(callback: RenderCallback): () => void
+
   // ── Subscriptions (useSyncExternalStore compatible) ──────────────────────
   /** Subscribe to changes for a specific session. The listener fires when
    *  structural state changes (new events processed), not every frame. */
@@ -130,6 +144,9 @@ export function createSimulationManager(): SimulationManager {
   const sessions = new Map<string, SessionSubState>()
   const listeners = new Map<string, Set<Listener>>()
   const snapshotVersions = new Map<string, number>()
+
+  /** Ordered list of render callbacks registered by canvases. */
+  const renderCallbacks: RenderCallback[] = []
 
   let rafId = 0
   let lastTimestamp = 0
@@ -245,6 +262,49 @@ export function createSimulationManager(): SimulationManager {
     return result
   }
 
+  // ── Position buffer sync ─────────────────────────────────────────────
+
+  /** Ensure every agent in the map has a slot in the position buffer. */
+  function syncPositionBuffer(sub: SessionSubState): void {
+    const buf = sub.positions
+    for (const [id, agent] of sub.frameState.agents) {
+      if (buf.indexOf(id) === undefined) {
+        buf.register(id, agent.x, agent.y, agent.vx ?? 0, agent.vy ?? 0)
+      }
+    }
+  }
+
+  /** Write physics node positions back to agents via in-place mutation.
+   *  Returns true if any agent moved >0.1 px. No new Map or agent objects
+   *  are allocated — positions are mutated directly on the mutable
+   *  frameState agents between React commits. */
+  function applyPhysicsPositionsInPlace(sub: SessionSubState): boolean {
+    const { physics, positions } = sub
+    const agents = sub.frameState.agents
+    let anyMoved = false
+
+    for (const node of physics.nodes.values()) {
+      const agent = agents.get(node.id)
+      if (!agent || agent.pinned) continue
+      if (Math.abs(agent.x - node.x) > 0.1 || Math.abs(agent.y - node.y) > 0.1) {
+        anyMoved = true
+        // Mutate in place — no spread allocation. Safe because frameState
+        // is the mutable per-frame state; React only sees committed snapshots.
+        ;(agent as { x: number; y: number }).x = node.x
+        ;(agent as { x: number; y: number }).y = node.y
+
+        // Keep position buffer in sync
+        const idx = positions.indexOf(node.id)
+        if (idx !== undefined) {
+          positions.setPosition(idx, node.x, node.y)
+          positions.setVelocity(idx, node.vx, node.vy)
+        }
+      }
+    }
+
+    return anyMoved
+  }
+
   // ── Commit snapshot: produce immutable copy for React ───────────────────
 
   function commitSnapshot(state: SimulationState): SimulationState {
@@ -269,6 +329,21 @@ export function createSimulationManager(): SimulationManager {
     let currentState = prev
     let hadNewEvents = false
     const ingestStart = performance.now()
+
+    // ── Mock-scenario time-based playback ─────────────────────────────
+    if (sub.useMockData) {
+      while (
+        newEventIndex < MOCK_SCENARIO.length &&
+        MOCK_SCENARIO[newEventIndex].time <= newTime
+      ) {
+        if (performance.now() - ingestStart > INGEST_BUDGET_MS) break
+        const evt = MOCK_SCENARIO[newEventIndex]
+        currentState = processEventForSession(evt, currentState, sub)
+        currentState.eventLog.push(evt)
+        hadNewEvents = true
+        newEventIndex++
+      }
+    }
 
     // Process deferred events from the previous frame first.
     if (sub.deferredEvents.length > 0) {
@@ -321,9 +396,11 @@ export function createSimulationManager(): SimulationManager {
     currentState = { ...currentState, eventIndex: newEventIndex }
 
     const result = computeNextFrame(prev, deltaTime, newTime, maxT, currentState, {
-      useMockData: false,
-      mockScenarioLength: 0,
-      mockScenarioEndTime: 0,
+      useMockData: sub.useMockData,
+      mockScenarioLength: sub.useMockData ? MOCK_SCENARIO.length : 0,
+      mockScenarioEndTime: sub.useMockData && MOCK_SCENARIO.length > 0
+        ? MOCK_SCENARIO[MOCK_SCENARIO.length - 1].time
+        : 0,
     })
 
     sub.frameState = result
@@ -334,13 +411,13 @@ export function createSimulationManager(): SimulationManager {
       syncPhysics(sub.physics, result.agents, result.edges)
     }
 
-    // Physics tick.
+    // Sync position buffer with any newly spawned agents.
+    syncPositionBuffer(sub)
+
+    // Physics tick — write positions back in place (zero allocations).
     if (!sub.physics.settled) {
       tickPhysics(sub.physics)
-      const movedAgents = applyPhysicsToAgents(sub.physics, sub.frameState.agents)
-      if (movedAgents) {
-        sub.frameState = { ...sub.frameState, agents: movedAgents }
-      }
+      applyPhysicsPositionsInPlace(sub)
     }
 
     // Throttle React notifications to ~4/sec.
@@ -378,15 +455,23 @@ export function createSimulationManager(): SimulationManager {
       tickSession(sessionId, sub, timestamp, deltaTime)
     }
 
+    // Call registered render callbacks (canvases) after all simulation ticks.
+    // Iterate a snapshot of the length in case a callback unregisters itself.
+    const cbLen = renderCallbacks.length
+    for (let i = 0; i < cbLen; i++) {
+      renderCallbacks[i](timestamp)
+    }
+
     rafId = requestAnimationFrame(loop)
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
 
-  function createSubState(opts?: { disable1MContext?: boolean }): SessionSubState {
+  function createSubState(opts?: { disable1MContext?: boolean; useMockData?: boolean }): SessionSubState {
     return {
       frameState: createEmptyState({ isPlaying: true }),
       physics: createPhysicsState(),
+      positions: new PositionBuffer(),
       blockIdCounter: 0,
       deferredEvents: [],
       lastUINotifyTimestamp: 0,
@@ -394,6 +479,7 @@ export function createSimulationManager(): SimulationManager {
       skipForceSync: false,
       pendingEvents: [],
       disable1MContext: opts?.disable1MContext ?? false,
+      useMockData: opts?.useMockData ?? false,
     }
   }
 
@@ -457,8 +543,9 @@ export function createSimulationManager(): SimulationManager {
       const sub = sessions.get(sessionId)
       if (!sub) return
 
+      sub.positions.clear()
       const prev = sub.frameState
-      const events = prev.eventLog.toArray()
+      const events = sub.useMockData ? MOCK_SCENARIO : prev.eventLog.toArray()
 
       let replayState = createEmptyState({
         speed: prev.speed,
@@ -494,6 +581,7 @@ export function createSimulationManager(): SimulationManager {
       if (!sub) return
 
       sub.blockIdCounter = 0
+      sub.positions.clear()
 
       if (!keepActive) {
         sub.frameState = createEmptyState({
@@ -564,11 +652,22 @@ export function createSimulationManager(): SimulationManager {
       const sub = sessions.get(sessionId)
       if (!sub) return
 
-      const prev = sub.frameState
-      const newAgents = new Map(prev.agents)
-      const agent = newAgents.get(agentId)
-      if (agent) newAgents.set(agentId, { ...agent, x, y, pinned: true })
-      sub.frameState = { ...prev, agents: newAgents }
+      // Mutate the agent's position in place — no Map clone, no object
+      // spread. Safe because frameState is the mutable per-frame state;
+      // React only sees committed snapshots.
+      const agent = sub.frameState.agents.get(agentId)
+      if (agent) {
+        ;(agent as { x: number; y: number; pinned: boolean }).x = x
+        ;(agent as { x: number; y: number; pinned: boolean }).y = y
+        ;(agent as { x: number; y: number; pinned: boolean }).pinned = true
+      }
+
+      // Write directly to the typed-array position buffer.
+      const idx = sub.positions.indexOf(agentId)
+      if (idx !== undefined) {
+        sub.positions.setPosition(idx, x, y)
+        sub.positions.setVelocity(idx, 0, 0)
+      }
 
       pinNode(sub.physics, agentId, x, y)
     },
@@ -591,6 +690,7 @@ export function createSimulationManager(): SimulationManager {
       if (!sub) return
 
       sub.blockIdCounter = snapshot.blockId
+      sub.positions.clear()
       const restored = {
         ...snapshot.simState,
         isPlaying: true,
@@ -599,6 +699,14 @@ export function createSimulationManager(): SimulationManager {
       sub.frameState = restored
       syncPhysics(sub.physics, restored.agents, restored.edges)
       notifyListeners(sessionId)
+    },
+
+    registerRender(callback) {
+      renderCallbacks.push(callback)
+      return () => {
+        const idx = renderCallbacks.indexOf(callback)
+        if (idx >= 0) renderCallbacks.splice(idx, 1)
+      }
     },
 
     subscribe(sessionId, listener) {

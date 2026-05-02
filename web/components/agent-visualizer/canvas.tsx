@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
@@ -23,6 +23,8 @@ import {
 } from './canvas/'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { createCanvas2DHitTestAdapter } from '@/hooks/hit-test-adapters'
+import { useSimulationManager } from './simulation-manager-provider'
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -49,18 +51,22 @@ interface CanvasProps {
    *  prop so callers can pass it without a type error; future per-session
    *  overlays (cost, badges) can read it. */
   sessionId?: string
+  /** When true (default), pause the render rAF when the canvas scrolls
+   *  off-screen. The simulation sub-state keeps ticking so stats panels
+   *  still receive fresh data. */
+  pauseWhenOffscreen?: boolean
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
-  minZoomLevel,
+  minZoomLevel, pauseWhenOffscreen = true,
 }: CanvasProps) {
+  const manager = useSimulationManager()
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
-  const animationRef = useRef<number>(0)
   const timeRef = useRef(0)
   const simTimeRef = useRef(0)
   const bloomRef = useRef<BloomRenderer | null>(null)
@@ -78,6 +84,14 @@ export function AgentCanvas({
   const toolStatesARef = useRef<Map<string, string>>(new Map())
   const toolStatesBRef = useRef<Map<string, string>>(new Map())
   const stateMapsUseARef = useRef(true)
+
+  // IntersectionObserver visibility gating — when true, the canvas is in the
+  // viewport and the render rAF should draw. When false, we skip drawing to
+  // save GPU work while the simulation sub-state keeps ticking.
+  const visibleRef = useRef(true)
+  // Flag: when the canvas re-enters the viewport, force one immediate redraw
+  // to catch up with simulation changes that happened while off-screen.
+  const needsCatchUpRef = useRef(false)
 
   // Rate-limited error logging for the draw loop (avoid flooding console)
   const lastDrawErrorRef = useRef(0)
@@ -127,12 +141,21 @@ export function AgentCanvas({
     minZoomLevel,
   })
 
+  // ─── Hit-detection adapter (Canvas2D path) ──────────────────────────────
+  // Stable across renders — the adapter closes over refs, not values.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const hitTestAdapter = useMemo(
+    () => createCanvas2DHitTestAdapter(drawPropsRef, simTimeRef),
+    [],
+  )
+
   // ─── Interaction ────────────────────────────────────────────────────────
   const {
     isDragging, handlers, updateDragLerp,
   } = useCanvasInteraction({
     drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
     simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef,
+    hitTestAdapter,
   })
 
   // Keep drawPropsRef in sync with interaction state
@@ -164,6 +187,30 @@ export function AgentCanvas({
     return () => observer.disconnect()
   }, [])
 
+  // ─── IntersectionObserver: pause render rAF when off-screen ─────────────
+  useEffect(() => {
+    if (!pauseWhenOffscreen) {
+      visibleRef.current = true
+      return
+    }
+    const el = containerRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const wasVisible = visibleRef.current
+          visibleRef.current = entry.isIntersecting
+          if (!wasVisible && entry.isIntersecting) {
+            needsCatchUpRef.current = true
+          }
+        }
+      },
+      { threshold: 0 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [pauseWhenOffscreen])
+
   // ─── Detect state changes → spawn effects ──────────────────────────────
 
   const detectStateChanges = useCallback(() => {
@@ -189,7 +236,10 @@ export function AgentCanvas({
   const drawRef = useRef<(timestamp: number) => void>(() => {})
 
   const draw = useCallback((timestamp: number) => {
-    animationRef.current = requestAnimationFrame((ts) => drawRef.current(ts))
+    // Skip rendering when the canvas is off-screen (IntersectionObserver).
+    // The simulation sub-state keeps ticking via the shared manager.
+    if (!visibleRef.current && !needsCatchUpRef.current) return
+    needsCatchUpRef.current = false
 
     const canvas = mainCanvasRef.current
     if (!canvas) return
@@ -357,12 +407,11 @@ export function AgentCanvas({
 
   drawRef.current = draw
 
+  // Register with the shared render loop instead of running our own rAF.
   useEffect(() => {
-    const loop = (timestamp: number) => drawRef.current(timestamp)
-    animationRef.current = requestAnimationFrame(loop)
-    return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- drawRef is stable; rAF loop set up once
-  }, [])
+    const callback = (timestamp: number) => drawRef.current(timestamp)
+    return manager.registerRender(callback)
+  }, [manager])
 
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: isDragging ? 'grabbing' : 'grab' }}>

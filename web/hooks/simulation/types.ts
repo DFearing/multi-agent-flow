@@ -118,17 +118,3 @@ export interface ForceLink {
   target: string | ForceNode
 }
 
-export interface UseAgentSimulationOptions {
-  /** If true, use MOCK_SCENARIO for demo playback. Default: true */
-  useMockData?: boolean
-  /** External events to process (from VS Code bridge). Consumed each frame. */
-  externalEvents?: readonly SimulationEvent[]
-  /** Called after external events are consumed */
-  onExternalEventsConsumed?: () => void
-  /** If set, only process events matching this session ID */
-  sessionFilter?: string | null
-  /** Ref updated synchronously when session changes (avoids stale closure in rAF) */
-  sessionFilterRef?: React.RefObject<string | null>
-  /** If true, CLAUDE_CODE_DISABLE_1M_CONTEXT is set — cap context window to 200k */
-  disable1MContext?: boolean
-}

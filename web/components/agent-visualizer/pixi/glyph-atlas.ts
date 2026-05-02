@@ -7,6 +7,9 @@
  *     glyph, a new row starts. When the canvas is full, a new backing canvas
  *     is allocated (no bin-packing for v1).
  *   - Returns Pixi `Texture` sub-regions referencing the backing BaseTexture.
+ *   - Page-level LRU eviction: when allocating a new page would exceed the
+ *     budget, the oldest page is dropped entirely. Entries on the dropped page
+ *     are invalidated; new requests re-render into the newest page.
  *
  * Font: `'SF Mono', 'Fira Code', monospace` to match the Canvas2D path.
  */
@@ -22,6 +25,8 @@ export interface GlyphDescriptor {
 
 /** Internal: one backing canvas and its current allocation cursor. */
 interface AtlasPage {
+  /** Monotonic page id for LRU tracking. */
+  id: number
   canvas: HTMLCanvasElement
   ctx: CanvasRenderingContext2D
   /** Pixi base texture wrapping this canvas. */
@@ -32,6 +37,8 @@ interface AtlasPage {
   cursorY: number
   /** Tallest glyph in the current row. */
   rowHeight: number
+  /** Timestamp of last access (monotonic counter, not wall clock). */
+  lastAccessTime: number
 }
 
 const ATLAS_SIZE = 1024
@@ -39,15 +46,32 @@ const ATLAS_PADDING = 2
 const DEFAULT_FONT_SIZE = 10
 const FONT_FAMILY = "'SF Mono', 'Fira Code', monospace"
 
+/** Default maximum number of atlas pages before LRU eviction kicks in. */
+const DEFAULT_MAX_PAGES = 4
+
 export class GlyphAtlas {
-  private cache = new Map<string, GlyphDescriptor>()
+  private cache = new Map<string, GlyphDescriptor & { pageId: number }>()
   private pages: AtlasPage[] = []
+  private pageIdCounter = 0
+  private accessCounter = 0
+  private maxPages: number
+
+  constructor(maxPages = DEFAULT_MAX_PAGES) {
+    this.maxPages = maxPages
+  }
 
   /** Look up or render a glyph and return its texture descriptor. */
   getGlyph(text: string, color: string, fontSize = DEFAULT_FONT_SIZE): GlyphDescriptor {
     const key = `${text}|${color}|${fontSize}`
     const cached = this.cache.get(key)
-    if (cached) return cached
+    if (cached) {
+      // Touch the page for LRU tracking
+      const page = this.pages.find(p => p.id === cached.pageId)
+      if (page) {
+        page.lastAccessTime = ++this.accessCounter
+      }
+      return cached
+    }
 
     // Measure the text
     const font = `${fontSize}px ${FONT_FAMILY}`
@@ -72,6 +96,9 @@ export class GlyphAtlas {
     page.cursorX += w
     page.rowHeight = Math.max(page.rowHeight, h)
 
+    // Touch the page
+    page.lastAccessTime = ++this.accessCounter
+
     // Build a Texture sub-region
     const frame = new Rectangle(x, y, w, h)
     // Pixi v8: Texture constructor takes a TextureSource + a TextureLayout.
@@ -81,7 +108,7 @@ export class GlyphAtlas {
       frame,
     })
 
-    const descriptor: GlyphDescriptor = { texture, width: w, height: h }
+    const descriptor = { texture, width: w, height: h, pageId: page.id }
     this.cache.set(key, descriptor)
     return descriptor
   }
@@ -129,8 +156,8 @@ export class GlyphAtlas {
       const page = this.pages[this.pages.length - 1]
       if (this.canFit(page, w, h)) return page
     }
-    // Allocate a new page
-    return this.allocatePage()
+    // Need a new page — evict if at budget
+    return this.allocatePageWithEviction()
   }
 
   private canFit(page: AtlasPage, w: number, h: number): boolean {
@@ -148,6 +175,46 @@ export class GlyphAtlas {
     return false
   }
 
+  private allocatePageWithEviction(): AtlasPage {
+    // If at budget, evict the oldest page
+    if (this.pages.length >= this.maxPages) {
+      this.evictOldestPage()
+    }
+    return this.allocatePage()
+  }
+
+  /** Drop the page with the lowest lastAccessTime. Invalidate all cache
+   *  entries that reference it — they will be re-rendered on next access. */
+  private evictOldestPage(): void {
+    if (this.pages.length === 0) return
+
+    // Find the page with the lowest lastAccessTime
+    let oldestIdx = 0
+    let oldestTime = this.pages[0].lastAccessTime
+    for (let i = 1; i < this.pages.length; i++) {
+      if (this.pages[i].lastAccessTime < oldestTime) {
+        oldestTime = this.pages[i].lastAccessTime
+        oldestIdx = i
+      }
+    }
+
+    const evicted = this.pages[oldestIdx]
+
+    // Remove cache entries that reference this page
+    for (const [key, desc] of this.cache) {
+      if (desc.pageId === evicted.id) {
+        desc.texture.destroy()
+        this.cache.delete(key)
+      }
+    }
+
+    // Destroy the page's backing texture and canvas
+    evicted.baseTexture.destroy(true)
+
+    // Remove from pages array
+    this.pages.splice(oldestIdx, 1)
+  }
+
   private allocatePage(): AtlasPage {
     const canvas = document.createElement('canvas')
     canvas.width = ATLAS_SIZE
@@ -157,12 +224,14 @@ export class GlyphAtlas {
     const baseTexture = Texture.from({ resource: canvas, alphaMode: 'premultiply-alpha-on-upload' })
 
     const page: AtlasPage = {
+      id: this.pageIdCounter++,
       canvas,
       ctx,
       baseTexture,
       cursorX: 0,
       cursorY: 0,
       rowHeight: 0,
+      lastAccessTime: ++this.accessCounter,
     }
     this.pages.push(page)
     return page
