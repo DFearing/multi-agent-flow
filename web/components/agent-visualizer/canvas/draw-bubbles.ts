@@ -2,7 +2,7 @@ import { Agent, NODE } from '@/lib/agent-types'
 import { COLORS, withAlpha } from '@/lib/colors'
 import { BUBBLE_MAX_W, BUBBLE_GAP, BUBBLE_MAX_LINES, AGENT_DRAW, BUBBLE_DRAW } from '@/lib/canvas-constants'
 import { bubbleAlpha } from './bubble-utils'
-import { measureTextCached } from './render-cache'
+import { measureTextCached, getTextSprite, drawTextSprite } from './render-cache'
 
 /** World-space bubbles attached to agents (used when zoomed in) */
 export function drawMessageBubblesWorld(
@@ -78,20 +78,22 @@ export function drawMessageBubblesWorld(
       ctx.lineWidth = 0.5
       ctx.stroke()
 
-      ctx.font = `${style.labelSize}px monospace`
-      ctx.textAlign = 'left'
-      ctx.textBaseline = 'top'
-      ctx.fillStyle = textColor + (isThinking ? '60' : '80')
-      ctx.fillText(label, anchorX + style.padding, cursorY + 3)
+      // Bubble header label — cached text sprite
+      const labelFont = `${style.labelSize}px monospace`
+      const labelColorFull = textColor + (isThinking ? '60' : '80')
+      const labelSp = getTextSprite(label, labelFont, labelColorFull, 'left', 'top')
+      drawTextSprite(ctx, labelSp, anchorX + style.padding, cursorY + 3, 'left', 'top')
 
-      ctx.font = `italic ${style.fontSize}px monospace`
-      ctx.fillStyle = textColor + (isThinking ? 'b0' : '')
+      // Bubble body lines — cached text sprites
+      const bodyFont = `italic ${style.fontSize}px monospace`
+      const bodyColor = textColor + (isThinking ? 'b0' : '')
       for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], anchorX + style.padding, cursorY + style.headerH + i * style.lineH)
+        const lineSp = getTextSprite(lines[i], bodyFont, bodyColor, 'left', 'top')
+        drawTextSprite(ctx, lineSp, anchorX + style.padding, cursorY + style.headerH + i * style.lineH, 'left', 'top')
       }
       if (truncated) {
-        ctx.fillStyle = textColor + '80'
-        ctx.fillText('...', anchorX + style.padding, cursorY + style.headerH + lines.length * style.lineH)
+        const ellipsisSp = getTextSprite('...', bodyFont, textColor + '80', 'left', 'top')
+        drawTextSprite(ctx, ellipsisSp, anchorX + style.padding, cursorY + style.headerH + lines.length * style.lineH, 'left', 'top')
       }
 
       ctx.restore()

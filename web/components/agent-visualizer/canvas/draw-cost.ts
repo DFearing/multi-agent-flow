@@ -3,6 +3,7 @@ import { COLORS } from '@/lib/colors'
 import { COST_RATE, COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { formatTokens } from '@/lib/utils'
 import { truncateText } from './draw-misc'
+import { getTextSprite, drawTextSprite, measureTextCached, getOverlaySprite, drawOverlaySprite } from './render-cache'
 
 export function agentCost(tokensUsed: number): number {
   return (tokensUsed / 1_000_000) * COST_RATE
@@ -47,68 +48,92 @@ export function drawCostLabels(
     // Floating cost pill
     const label = `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
     ctx.font = 'bold 9px monospace'
-    const labelW = ctx.measureText(label).width
+    const labelW = measureTextCached(ctx, label)
     const pillW = labelW + COST_DRAW.pillPadding
     const pillH = COST_DRAW.pillHeight
-    const pillX = agent.x - pillW / 2
+
+    // Build a hash for the overlay cache: cost label + tool breakdown
+    const agentTools = toolsByAgent.get(agent.id)
+    let toolHash = ''
+    if (agentTools && agentTools.length > 0) {
+      const byType = new Map<string, number>()
+      for (const tc of agentTools) {
+        const tokens = tc.tokenCost || 0
+        byType.set(tc.toolName, (byType.get(tc.toolName) || 0) + tokens)
+      }
+      // Quantize to nearest 100 tokens to reduce invalidation frequency
+      toolHash = Array.from(byType.entries())
+        .map(([n, t]) => `${n}:${Math.round(t / 100)}`)
+        .join(',')
+    }
+    const dataHash = `cost|${label}|${toolHash}`
+
+    // Total overlay height includes pill + optional mini bar
+    const hasBar = agentTools && agentTools.length > 0
+    const overlayH = pillH + (hasBar ? COST_DRAW.miniBarGap + COST_DRAW.miniBarHeight : 0)
+    const barW = Math.min(pillW + COST_DRAW.miniBarMaxExtra, COST_DRAW.miniBarMax)
+    const overlayW = Math.max(pillW, hasBar ? barW : 0) + 2 // 2px margin for stroke
+
+    const sprite = getOverlaySprite(
+      `cost-${agent.id}`, dataHash, overlayW, overlayH + 2, 1,
+      (offCtx) => {
+        const oPillX = (overlayW - pillW) / 2
+
+        // Pill background
+        offCtx.fillStyle = COLORS.costPillBg
+        offCtx.strokeStyle = COLORS.costPillStroke
+        offCtx.lineWidth = 1
+        offCtx.beginPath()
+        offCtx.roundRect(oPillX, 1, pillW, pillH, COST_DRAW.pillRadius)
+        offCtx.fill()
+        offCtx.stroke()
+
+        // Cost text
+        offCtx.fillStyle = COLORS.costText
+        offCtx.font = 'bold 9px monospace'
+        offCtx.textAlign = 'center'
+        offCtx.textBaseline = 'middle'
+        offCtx.fillText(label, overlayW / 2, 1 + pillH / 2)
+
+        // Mini tool-type cost bar
+        if (agentTools && agentTools.length > 0) {
+          const byType = new Map<string, number>()
+          let totalToolTokens = 0
+          for (const tc of agentTools) {
+            const tokens = tc.tokenCost || 0
+            byType.set(tc.toolName, (byType.get(tc.toolName) || 0) + tokens)
+            totalToolTokens += tokens
+          }
+          if (totalToolTokens > 0) {
+            const miniBarH = COST_DRAW.miniBarHeight
+            const miniBarX = (overlayW - barW) / 2
+            const miniBarY = pillH + COST_DRAW.miniBarGap + 1
+
+            offCtx.fillStyle = COLORS.holoBorder06
+            offCtx.beginPath()
+            offCtx.roundRect(miniBarX, miniBarY, barW, miniBarH, COST_DRAW.miniBarRadius)
+            offCtx.fill()
+
+            let segX = miniBarX
+            for (const [toolName, tokens] of byType) {
+              const segW = (tokens / totalToolTokens) * barW
+              if (segW < 1) continue
+              offCtx.fillStyle = toolTypeColor(toolName)
+              offCtx.globalAlpha = 0.7
+              offCtx.beginPath()
+              offCtx.roundRect(segX, miniBarY, segW, miniBarH, COST_DRAW.miniBarRadius)
+              offCtx.fill()
+              offCtx.globalAlpha = 1
+              segX += segW
+            }
+          }
+        }
+      },
+    )
 
     ctx.save()
     ctx.globalAlpha = agent.opacity * 0.9
-
-    // Pill background
-    ctx.fillStyle = COLORS.costPillBg
-    ctx.strokeStyle = COLORS.costPillStroke
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.roundRect(pillX, pillY, pillW, pillH, COST_DRAW.pillRadius)
-    ctx.fill()
-    ctx.stroke()
-
-    // Cost text
-    ctx.fillStyle = COLORS.costText
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, agent.x, pillY + pillH / 2)
-
-    // Mini tool-type cost bar below the pill
-    const agentTools = toolsByAgent.get(agent.id)
-    if (agentTools && agentTools.length > 0) {
-      // Group by tool type
-      const byType = new Map<string, number>()
-      let totalToolTokens = 0
-      for (const tc of agentTools) {
-        const tokens = tc.tokenCost || 0
-        const key = tc.toolName
-        byType.set(key, (byType.get(key) || 0) + tokens)
-        totalToolTokens += tokens
-      }
-      if (totalToolTokens > 0) {
-        const barW = Math.min(pillW + COST_DRAW.miniBarMaxExtra, COST_DRAW.miniBarMax)
-        const barH = COST_DRAW.miniBarHeight
-        const barX = agent.x - barW / 2
-        const barY = pillY + pillH + COST_DRAW.miniBarGap
-
-        // Bar background
-        ctx.fillStyle = COLORS.holoBorder06
-        ctx.beginPath()
-        ctx.roundRect(barX, barY, barW, barH, COST_DRAW.miniBarRadius)
-        ctx.fill()
-
-        // Segments
-        let segX = barX
-        for (const [toolName, tokens] of byType) {
-          const segW = (tokens / totalToolTokens) * barW
-          if (segW < 1) continue
-          ctx.fillStyle = toolTypeColor(toolName)
-          ctx.globalAlpha = agent.opacity * 0.7
-          ctx.beginPath()
-          ctx.roundRect(segX, barY, segW, barH, COST_DRAW.miniBarRadius)
-          ctx.fill()
-          segX += segW
-        }
-      }
-    }
-
+    drawOverlaySprite(ctx, sprite, agent.x - overlayW / 2, pillY - 1)
     ctx.restore()
   }
 }
@@ -168,16 +193,16 @@ export function drawCostSummaryPanel(
 
   let y = panelY + 8
 
-  // Header: total cost
-  ctx.font = 'bold 11px monospace'
-  ctx.textAlign = 'left'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = COLORS.costText
-  ctx.fillText(`$${totalCost.toFixed(3)}`, panelX + COST_PANEL.contentPadding, y)
+  // Header: total cost — cached text sprites
+  const costStr = `$${totalCost.toFixed(3)}`
+  const costSp = getTextSprite(costStr, 'bold 11px monospace', COLORS.costText, 'left', 'top')
+  drawTextSprite(ctx, costSp, panelX + COST_PANEL.contentPadding, y, 'left', 'top')
 
-  ctx.font = '9px monospace'
-  ctx.fillStyle = COLORS.textMuted
-  ctx.fillText(`${formatTokens(totalTokens)} tokens`, panelX + COST_PANEL.contentPadding + ctx.measureText(`$${totalCost.toFixed(3)}`).width + 14, y + 2)
+  ctx.font = 'bold 11px monospace'
+  const costStrW = measureTextCached(ctx, costStr)
+  const tokenStr = `${formatTokens(totalTokens)} tokens`
+  const tokenSp = getTextSprite(tokenStr, '9px monospace', COLORS.textMuted, 'left', 'top')
+  drawTextSprite(ctx, tokenSp, panelX + COST_PANEL.contentPadding + costStrW + 14, y + 2, 'left', 'top')
 
   y += headerH
 
@@ -201,16 +226,16 @@ export function drawCostSummaryPanel(
     ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW * ratio, lineH - 3, COST_PANEL.barRadius)
     ctx.fill()
 
-    // Agent name
+    // Agent name — cached text sprite
     ctx.font = '8px monospace'
-    ctx.fillStyle = COLORS.textPrimary
-    ctx.textAlign = 'left'
-    ctx.fillText(truncateText(ctx, a.name, barW - 50), panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3)
+    const agentName = truncateText(ctx, a.name, barW - 50)
+    const nameSp = getTextSprite(agentName, '8px monospace', COLORS.textPrimary, 'left', 'top')
+    drawTextSprite(ctx, nameSp, panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3, 'left', 'top')
 
-    // Cost
-    ctx.textAlign = 'right'
-    ctx.fillStyle = COLORS.costText
-    ctx.fillText(`$${a.cost.toFixed(3)}`, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
+    // Cost — cached text sprite
+    const costLabel = `$${a.cost.toFixed(3)}`
+    const costLabelSp = getTextSprite(costLabel, '8px monospace', COLORS.costText, 'right', 'top')
+    drawTextSprite(ctx, costLabelSp, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3, 'right', 'top')
 
     y += lineH
   }
@@ -219,10 +244,8 @@ export function drawCostSummaryPanel(
   if (toolList.length > 0) {
     y += sectionGap
 
-    ctx.font = '8px monospace'
-    ctx.fillStyle = COLORS.textMuted
-    ctx.textAlign = 'left'
-    ctx.fillText('BY TOOL', panelX + COST_PANEL.contentPadding, y)
+    const byToolSp = getTextSprite('BY TOOL', '8px monospace', COLORS.textMuted, 'left', 'top')
+    drawTextSprite(ctx, byToolSp, panelX + COST_PANEL.contentPadding, y, 'left', 'top')
     y += 14
 
     for (let i = 0; i < toolRows; i++) {
@@ -243,16 +266,16 @@ export function drawCostSummaryPanel(
       ctx.fill()
       ctx.globalAlpha = 1
 
-      // Tool name
+      // Tool name — cached text sprite
       ctx.font = '8px monospace'
-      ctx.fillStyle = toolTypeColor(t.name)
-      ctx.textAlign = 'left'
-      ctx.fillText(truncateText(ctx, t.name, barW - 50), panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3)
+      const tName = truncateText(ctx, t.name, barW - 50)
+      const tNameSp = getTextSprite(tName, '8px monospace', toolTypeColor(t.name), 'left', 'top')
+      drawTextSprite(ctx, tNameSp, panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3, 'left', 'top')
 
-      // Cost
-      ctx.textAlign = 'right'
-      ctx.fillStyle = COLORS.costTextDim
-      ctx.fillText(`$${t.cost.toFixed(3)}`, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
+      // Cost — cached text sprite
+      const tCostLabel = `$${t.cost.toFixed(3)}`
+      const tCostSp = getTextSprite(tCostLabel, '8px monospace', COLORS.costTextDim, 'right', 'top')
+      drawTextSprite(ctx, tCostSp, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3, 'right', 'top')
 
       y += lineH
     }
