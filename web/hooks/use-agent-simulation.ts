@@ -53,6 +53,11 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   const forceSimRef = useRef<Simulation<ForceNode, ForceLink> | null>(null)
   const blockIdCounter = useRef(0)
   const skipForceSyncRef = useRef(false)
+  /** Set false until the simulation has consumed its first non-empty
+   *  externalEvents batch — that very first batch always gets snapped to
+   *  visual-settled state so the post-warmup flush from the bridge doesn't
+   *  trigger a wave of fade-in animations and particle bursts. */
+  const firstBatchSnappedRef = useRef(false)
   const animateRef = useRef<(timestamp: number) => void>(() => {})
   /** Throttle React UI updates to ~4/sec — canvas stays smooth via frameRef */
   const lastUIUpdateRef = useRef(0)
@@ -258,14 +263,21 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
       newTime = Math.max(newTime, currentState.currentTime)
       maxT = Math.max(maxT, newTime)
 
-      // Auto-snap on a large batch — happens when the bridge flushes its
-      // post-warmup backlog or when SSE replays a long history. Without this
-      // every spawned agent fades in from opacity:0 and every tool call
-      // ejects a particle, all stacked in one frame, which looks chaotic and
-      // wastes a few hundred ms of GPU time. Snapping makes the canvas
-      // settle to the analytically-correct visual state instantly.
-      if (capturedEvents.length > BATCH_SNAP_THRESHOLD) {
-        currentState = snapVisualState(currentState, currentState.currentTime)
+      // Auto-snap conditions:
+      //   1. The very first non-empty batch this simulation ever sees — the
+      //      bridge defers all warmup-period events into this single render
+      //      so we know it represents accumulated history, not a live tick.
+      //   2. Any subsequent batch larger than BATCH_SNAP_THRESHOLD — covers
+      //      catch-up scenarios after a tab unfocus / reconnect / replay.
+      // Without snapping, every spawned agent fades in from opacity:0 and
+      // every tool call ejects a particle, all stacked in one frame.
+      if (capturedEvents.length > 0) {
+        const isFirstBatch = !firstBatchSnappedRef.current
+        const isLargeBatch = capturedEvents.length > BATCH_SNAP_THRESHOLD
+        if (isFirstBatch || isLargeBatch) {
+          currentState = snapVisualState(currentState, currentState.currentTime)
+        }
+        firstBatchSnappedRef.current = true
       }
     }
 
