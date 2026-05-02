@@ -20,6 +20,8 @@ import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
 import { createPixiApp, disposeTextureCache } from './pixi-app'
 import { AgentsLayer } from './agents-layer'
 import { EdgesLayer } from './edges-layer'
+import { ToolCallsLayer } from './tool-calls-layer'
+import { DiscoveriesLayer } from './discoveries-layer'
 import { ParticlesLayer } from './particles-layer'
 import { applyCameraTransform } from './camera'
 
@@ -59,10 +61,8 @@ export function PixiCanvas({
   onAgentDrag,
   onContextMenu,
   onToolCallClick,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   selectedToolCallId,
   onDiscoveryClick,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   selectedDiscoveryId,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   showCostOverlay,
@@ -72,6 +72,8 @@ export function PixiCanvas({
   const appRef = useRef<Application | null>(null)
   const agentsLayerRef = useRef<AgentsLayer | null>(null)
   const edgesLayerRef = useRef<EdgesLayer | null>(null)
+  const toolCallsLayerRef = useRef<ToolCallsLayer | null>(null)
+  const discoveriesLayerRef = useRef<DiscoveriesLayer | null>(null)
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
   const worldRef = useRef<Container | null>(null)
   const animRef = useRef<number>(0)
@@ -228,12 +230,22 @@ export function PixiCanvas({
       app.stage.addChild(world)
       worldRef.current = world
 
-      // Edges layer (behind agents in z-order, matching Canvas2D draw order)
+      // Edges layer (behind tool calls in z-order, matching Canvas2D draw order)
       const edgesLayer = new EdgesLayer()
       world.addChild(edgesLayer.container)
       edgesLayerRef.current = edgesLayer
 
-      // Agents layer (above edges, below particles)
+      // Tool calls layer (above edges, below discoveries)
+      const toolCallsLayer = new ToolCallsLayer()
+      world.addChild(toolCallsLayer.container)
+      toolCallsLayerRef.current = toolCallsLayer
+
+      // Discoveries layer (above tool calls, below agents)
+      const discoveriesLayer = new DiscoveriesLayer()
+      world.addChild(discoveriesLayer.container)
+      discoveriesLayerRef.current = discoveriesLayer
+
+      // Agents layer (above discoveries, below particles)
       const agentsLayer = new AgentsLayer()
       world.addChild(agentsLayer.container)
       agentsLayerRef.current = agentsLayer
@@ -273,7 +285,7 @@ export function PixiCanvas({
         // Apply camera transform to the world container
         applyCameraTransform(world, transformRef.current)
 
-        // Update edges layer (drawn behind agents)
+        // Update edges layer (drawn behind tool calls)
         edgesLayer.update(
           s.edges,
           s.particles,
@@ -282,7 +294,21 @@ export function PixiCanvas({
           timeRef.current,
         )
 
-        // Update agents layer (above edges, below particles)
+        // Update tool calls layer (above edges, below discoveries)
+        toolCallsLayer.update(
+          s.toolCalls,
+          timeRef.current,
+          selectedToolCallId,
+        )
+
+        // Update discoveries layer (above tool calls, below agents)
+        discoveriesLayer.update(
+          s.discoveries,
+          s.agents,
+          selectedDiscoveryId,
+        )
+
+        // Update agents layer (above discoveries, below particles)
         agentsLayer.update(
           s.agents,
           selectedAgentId,
@@ -312,6 +338,14 @@ export function PixiCanvas({
       if (agentsLayerRef.current) {
         agentsLayerRef.current.dispose()
         agentsLayerRef.current = null
+      }
+      if (toolCallsLayerRef.current) {
+        toolCallsLayerRef.current.dispose()
+        toolCallsLayerRef.current = null
+      }
+      if (discoveriesLayerRef.current) {
+        discoveriesLayerRef.current.dispose()
+        discoveriesLayerRef.current = null
       }
       if (edgesLayerRef.current) {
         edgesLayerRef.current.dispose()
