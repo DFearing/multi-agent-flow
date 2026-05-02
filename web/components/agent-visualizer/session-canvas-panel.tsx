@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAgentSimulation } from '@/hooks/use-agent-simulation'
 import { usePanelLayout } from '@/hooks/use-panel-layout'
+import { useSessionNames } from '@/hooks/use-session-names'
+import { colorForSession } from '@/lib/colors'
 import { AgentCanvas } from './canvas'
 import { FloatingPanel } from './floating-panel'
 import { useSessionStats } from './session-stats-provider'
@@ -69,12 +71,14 @@ export function SessionCanvasPanel({
     sim.play()
   }, [sim.play])
 
-  // Publish this session's agents/toolCalls so the cost-summary panel (and any
-  // future cross-session aggregators) can read them.
   const { setSessionStats, removeSessionStats } = useSessionStats()
   useEffect(() => {
-    setSessionStats(sessionId, { agents: sim.agents, toolCalls: sim.toolCalls })
-  }, [sessionId, sim.agents, sim.toolCalls, setSessionStats])
+    setSessionStats(sessionId, {
+      agents: sim.agents,
+      toolCalls: sim.toolCalls,
+      conversations: sim.conversations,
+    })
+  }, [sessionId, sim.agents, sim.toolCalls, sim.conversations, setSessionStats])
   useEffect(() => {
     return () => removeSessionStats(sessionId)
   }, [sessionId, removeSessionStats])
@@ -99,6 +103,11 @@ export function SessionCanvasPanel({
   const { panels, bootedAsAttached } = usePanelLayout()
   const explicitlyVisible = panels[panelId]?.hidden === false
 
+  const sessionColor = colorForSession(sessionId)
+
+  const { getName, setName } = useSessionNames()
+  const displayTitle = getName(sessionId) ?? sessionLabel
+
   // Fresh attach (`?host=<id>` with no `?session=`) starts blank: only show
   // canvas tiles that the host has explicitly sent over via `→`.
   if (bootedAsAttached && !explicitlyVisible) return null
@@ -110,10 +119,12 @@ export function SessionCanvasPanel({
       defaultRect={defaultRect}
       minW={320}
       minH={240}
-      title={sessionLabel}
+      title={displayTitle}
+      accentColor={sessionColor.accent}
+      onTitleEdit={(next) => setName(sessionId, next)}
       noContentZoom
     >
-      <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <div style={{ width: '100%', height: '100%', position: 'relative', background: sessionColor.tint }}>
         <AgentCanvas
           simulationRef={sim.frameRef}
           sessionId={sessionId}

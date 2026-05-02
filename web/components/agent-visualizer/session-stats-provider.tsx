@@ -2,10 +2,12 @@
 
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react'
 import type { Agent, ToolCallNode } from '@/lib/agent-types'
+import type { ConversationMessage } from '@/hooks/simulation/types'
 
 export interface SessionStats {
   agents: Map<string, Agent>
   toolCalls: Map<string, ToolCallNode>
+  conversations: Map<string, ConversationMessage[]>
 }
 
 interface SessionStatsAPI {
@@ -23,7 +25,10 @@ export function SessionStatsProvider({ children }: { children: ReactNode }) {
     setPerSession(prev => {
       const existing = prev.get(sessionId)
       // Avoid creating a new Map if the references are unchanged.
-      if (existing && existing.agents === stats.agents && existing.toolCalls === stats.toolCalls) return prev
+      if (existing
+          && existing.agents === stats.agents
+          && existing.toolCalls === stats.toolCalls
+          && existing.conversations === stats.conversations) return prev
       const next = new Map(prev)
       next.set(sessionId, stats)
       return next

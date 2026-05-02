@@ -2,7 +2,7 @@
 
 import { useRef, useEffect, useState } from 'react'
 import { CARD } from '@/lib/agent-types'
-import { COLORS } from '@/lib/colors'
+import { COLORS, colorForSession } from '@/lib/colors'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { CloseButton } from './shared-ui'
@@ -19,14 +19,20 @@ const TRANSCRIPT_INITIAL_VIEWPORT = 400
 interface TranscriptPanelProps {
   visible: boolean
   conversation: ConversationMessage[]
+  /** Active session id this transcript reflects. Drives the per-session
+   *  accent stripe on the title bar and the message-row left border, so the
+   *  transcript reads as a continuation of its source canvas. */
+  sessionId: string | null
   onClose: () => void
 }
 
 export function SessionTranscriptPanel({
   visible,
   conversation,
+  sessionId,
   onClose,
 }: TranscriptPanelProps) {
+  const sessionColor = sessionId ? colorForSession(sessionId) : null
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -76,6 +82,7 @@ export function SessionTranscriptPanel({
       minH={200}
       visible={visible}
       title="TRANSCRIPT"
+      accentColor={sessionColor?.accent}
       onClose={onClose}
     >
       <div className="h-full flex flex-col">
@@ -142,7 +149,11 @@ export function SessionTranscriptPanel({
                   <div
                     key={msg.id}
                     ref={(el) => itemMeasureRef(msg.id, el)}
-                    style={{ marginBottom: TRANSCRIPT_GAP }}
+                    style={{
+                      marginBottom: TRANSCRIPT_GAP,
+                      borderLeft: sessionColor ? `2px solid ${sessionColor.border}` : undefined,
+                      paddingLeft: sessionColor ? 6 : 0,
+                    }}
                   >
                     <TranscriptMessage message={msg} searchQuery={searchQuery} />
                   </div>

@@ -6,9 +6,10 @@ import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { SessionCanvasPanel } from "./session-canvas-panel"
-import { SessionStatsProvider } from "./session-stats-provider"
+import { SessionStatsProvider, useSessionStats } from "./session-stats-provider"
 import { CostSummaryPanel } from "./cost-summary-panel"
-import { AgentNamesProvider } from "@/hooks/use-agent-names"
+import { SessionNamesProvider } from "@/hooks/use-session-names"
+import { useWorkspaceFilter } from "@/hooks/use-workspace-filter"
 import { ControlBar } from "./control-bar"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
@@ -20,7 +21,8 @@ import { AgentChatPanel } from "./chat-panel"
 import { SessionTranscriptPanel } from "./session-transcript-panel"
 import { OpenFileProvider } from "./tool-content-renderer"
 import { stopPropagationHandlers } from "./shared-ui"
-import { TimelineEvent, TIMING } from "@/lib/agent-types"
+import { TimelineEvent, TIMING, type Agent } from "@/lib/agent-types"
+import type { ConversationMessage } from "@/hooks/simulation/types"
 import { COLORS } from "@/lib/colors"
 
 import { MOCK_DURATION } from "@/lib/mock-scenario"
@@ -34,9 +36,9 @@ export function AgentVisualizer() {
   return (
     <PanelLayoutProvider>
       <SessionStatsProvider>
-        <AgentNamesProvider>
+        <SessionNamesProvider>
           <AgentVisualizerInner />
-        </AgentNamesProvider>
+        </SessionNamesProvider>
       </SessionStatsProvider>
     </PanelLayoutProvider>
   )
@@ -318,6 +320,43 @@ function AgentVisualizerInner() {
 
   const isEmpty = agents.size === 0 && !bridge.useMockData
 
+  const workspaceFilter = useWorkspaceFilter()
+  useEffect(() => {
+    for (const s of bridge.sessions) {
+      if (s.cwd) workspaceFilter.registerCwd(s.cwd)
+    }
+  }, [bridge.sessions, workspaceFilter])
+
+  const visibleSessions = useMemo(
+    () => bridge.sessions.filter(s => workspaceFilter.isVisible(s.cwd)),
+    [bridge.sessions, workspaceFilter],
+  )
+
+  // Keys are `${sessionId}:${agentId}` to disambiguate same-named agents
+  // (e.g. two "orchestrator"s) across sessions.
+  const { perSession } = useSessionStats()
+  const visibleSessionIds = useMemo(
+    () => new Set(visibleSessions.map(s => s.id)),
+    [visibleSessions],
+  )
+  const { feedConversations, feedAgents, agentToSession } = useMemo(() => {
+    const fc = new Map<string, ConversationMessage[]>()
+    const fa = new Map<string, Agent>()
+    const a2s = new Map<string, string>()
+    for (const [sid, stats] of perSession) {
+      if (!visibleSessionIds.has(sid)) continue
+      for (const [agentId, ag] of stats.agents) {
+        const key = `${sid}:${agentId}`
+        fa.set(key, ag)
+        a2s.set(key, sid)
+      }
+      for (const [agentId, msgs] of stats.conversations) {
+        fc.set(`${sid}:${agentId}`, msgs)
+      }
+    }
+    return { feedConversations: fc, feedAgents: fa, agentToSession: a2s }
+  }, [perSession, visibleSessionIds])
+
   // Slot assignment: each live session gets the lowest unused slot, stable for
   // the lifetime of this page load. Slot rects persist in localStorage as
   // `canvas-slot-<N>`, so positions are remembered across reloads even though
@@ -325,11 +364,11 @@ function AgentVisualizerInner() {
   const sessionSlotsRef = useRef<Map<string, number>>(new Map())
   const sessionSlots = useMemo(() => {
     const map = sessionSlotsRef.current
-    const liveIds = new Set(bridge.sessions.map(s => s.id))
+    const liveIds = new Set(visibleSessions.map(s => s.id))
     for (const id of [...map.keys()]) {
       if (!liveIds.has(id)) map.delete(id)
     }
-    for (const session of bridge.sessions) {
+    for (const session of visibleSessions) {
       if (map.has(session.id)) continue
       const used = new Set(map.values())
       let n = 1
@@ -337,7 +376,7 @@ function AgentVisualizerInner() {
       map.set(session.id, n)
     }
     return new Map(map)
-  }, [bridge.sessions])
+  }, [visibleSessions])
 
   return (
     <OpenFileProvider value={bridge.isVSCode ? openFile : null}>
@@ -377,11 +416,9 @@ function AgentVisualizerInner() {
         </div>
       )}
 
-      {/* One draggable canvas per active session, mapped onto persistent slots.
-          Slot rects (`canvas-slot-N`) are remembered in localStorage; sessions
-          are assigned the lowest unused slot in arrival order, so positions
-          stick across Claude Code restarts (which mint new session UUIDs). */}
-      {bridge.sessions.map(session => {
+      {/* Slot rects persist as `canvas-slot-N` so positions outlive the
+          session UUIDs they were captured under. */}
+      {visibleSessions.map(session => {
         const slot = sessionSlots.get(session.id) ?? 0
         if (slot === 0) return null
         return (
@@ -414,10 +451,10 @@ function AgentVisualizerInner() {
         )
       })}
 
-      {/* Message feed panel (top-left) */}
       <MessageFeedPanel
-        conversations={conversations}
-        agents={agents}
+        conversations={feedConversations}
+        agents={feedAgents}
+        agentToSession={agentToSession}
         onAgentClick={selection.handleAgentClick}
         selectedAgentId={selection.selectedAgentId}
       />
@@ -426,7 +463,6 @@ function AgentVisualizerInner() {
       {selectedAgent && selection.selectedAgentWorldPos && !detailCardHidden && (
         <AgentDetailCard
           agent={selectedAgent}
-          sessionId={bridge.selectedSessionId ?? ''}
           onClose={() => setDetailCardHidden(true)}
         />
       )}
@@ -510,6 +546,7 @@ function AgentVisualizerInner() {
       <SessionTranscriptPanel
         visible={showTranscript}
         conversation={sessionConversation}
+        sessionId={bridge.selectedSessionId}
         onClose={() => setShowTranscript(false)}
       />
 
@@ -529,11 +566,13 @@ function AgentVisualizerInner() {
 
       {/* Top bar: session tabs + info/controls */}
       <TopBar
-        sessions={bridge.sessions}
+        sessions={visibleSessions}
+        allSessions={bridge.sessions}
         selectedSessionId={bridge.selectedSessionId}
         sessionsWithActivity={bridge.sessionsWithActivity}
         onSelectSession={bridge.selectSession}
         onCloseSession={handleCloseSession}
+        onRemoveSession={bridge.removeSession}
         isVSCode={bridge.isVSCode}
         connectionStatus={bridge.connectionStatus}
         agentCount={agents.size}
@@ -543,6 +582,7 @@ function AgentVisualizerInner() {
         showCostOverlay={showCostOverlay}
         showTimeline={showTimeline}
         isMuted={isMuted}
+        workspaceFilter={workspaceFilter}
         onTogglePanel={togglePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}

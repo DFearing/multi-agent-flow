@@ -20,6 +20,13 @@ interface FloatingPanelProps {
   /** Skip the CSS-zoom font scaling for this panel's content. Canvases handle
    *  their own DPR scaling and double-scaling makes them blurry. */
   noContentZoom?: boolean
+  /** Optional left-edge accent stripe + tinted title-bar background. Used by
+   *  per-session canvas panels so each session is visually distinguishable. */
+  accentColor?: string
+  /** Double-click-to-rename hook for the title bar. When provided, the title
+   *  becomes editable. The callback receives the trimmed new value (empty
+   *  string clears any custom name and reverts to the default). */
+  onTitleEdit?: (next: string) => void
   children: ReactNode
 }
 
@@ -41,6 +48,8 @@ export function FloatingPanel({
   title,
   showHandle = true,
   noContentZoom = false,
+  accentColor,
+  onTitleEdit,
   children,
 }: FloatingPanelProps) {
   const { getPanelRect, setPanelRect, bringToFront, sendPanelToNext, sendPanelToPrev, otherInstances } = usePanelLayout()
@@ -182,23 +191,27 @@ export function FloatingPanel({
               alignItems: 'center',
               justifyContent: 'space-between',
               padding: '4px 10px',
+              paddingLeft: accentColor ? 12 : 10,
               cursor: 'grab',
               borderBottom: `1px solid ${COLORS.holoBorder06}`,
               flexShrink: 0,
               userSelect: 'none',
             }}
           >
-            <span
-              style={{
-                fontSize: 10,
-                fontFamily: "'SF Mono', 'Fira Code', monospace",
-                letterSpacing: '0.08em',
-                fontWeight: 600,
-                color: COLORS.textPrimary,
-              }}
-            >
-              {title}
-            </span>
+            {/* Per-session accent stripe (left edge) */}
+            {accentColor && (
+              <div
+                aria-hidden
+                style={{
+                  position: 'absolute',
+                  left: 0, top: 0, bottom: 0,
+                  width: 3,
+                  background: accentColor,
+                  pointerEvents: 'none',
+                }}
+              />
+            )}
+            <TitleLabel title={title} onTitleEdit={onTitleEdit} />
             {showHandle && (
               <div
                 style={{
@@ -369,5 +382,64 @@ function SendButton({ direction, onSend }: { direction: 'prev' | 'next'; onSend:
     >
       {direction === 'next' ? '→' : '←'}
     </button>
+  )
+}
+
+// ─── Title label (optional inline rename) ──────────────────────────────────
+
+function TitleLabel({ title, onTitleEdit }: { title: string; onTitleEdit?: (next: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(title)
+
+  const baseStyle: React.CSSProperties = {
+    fontSize: 10,
+    fontFamily: "'SF Mono', 'Fira Code', monospace",
+    letterSpacing: '0.08em',
+    fontWeight: 600,
+    color: COLORS.textPrimary,
+  }
+
+  if (!onTitleEdit) {
+    return <span style={baseStyle}>{title}</span>
+  }
+
+  if (editing) {
+    const commit = () => { onTitleEdit(draft); setEditing(false) }
+    const cancel = () => { setDraft(title); setEditing(false) }
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          e.stopPropagation()
+          if (e.key === 'Enter') commit()
+          else if (e.key === 'Escape') cancel()
+        }}
+        onBlur={commit}
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
+        style={{
+          ...baseStyle,
+          flex: 1,
+          minWidth: 0,
+          background: 'rgba(10, 15, 30, 0.85)',
+          border: `1px solid ${COLORS.holoBorder12}`,
+          borderRadius: 3,
+          padding: '1px 4px',
+          outline: 'none',
+        }}
+      />
+    )
+  }
+
+  return (
+    <span
+      onDoubleClick={(e) => { e.stopPropagation(); setDraft(title); setEditing(true) }}
+      title="Double-click to rename"
+      style={{ ...baseStyle, cursor: 'text' }}
+    >
+      {title}
+    </span>
   )
 }

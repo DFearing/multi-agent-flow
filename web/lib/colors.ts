@@ -264,3 +264,36 @@ export function contextSegments(bd: ContextBreakdown) {
     { value: bd.subagentResults, color: COLORS.contextSubagent },
   ]
 }
+
+// ─── Per-session color ──────────────────────────────────────────────────────
+
+/** Six well-spaced hues that read distinctly against the holo-blue chrome
+ *  without competing for attention with agent state colors (which already
+ *  use the cyan/amber/green/red corners of the wheel). */
+const SESSION_HUES = [205, 280, 145, 25, 320, 60] as const
+
+/** djb2-style string hash → uint32. Keeps the result deterministic per
+ *  sessionId so reloading produces the same color. */
+function hashString(s: string): number {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return h >>> 0
+}
+
+export interface SessionColor {
+  /** Vivid HSL string for the title-bar accent stripe and message dot. */
+  accent: string
+  /** Very faint wash for canvas drawing-area background. */
+  tint: string
+  /** Subtle border tint for transcript message rows. */
+  border: string
+}
+
+export function colorForSession(sessionId: string): SessionColor {
+  const hue = SESSION_HUES[hashString(sessionId) % SESSION_HUES.length]
+  return {
+    accent: `hsl(${hue} 75% 62%)`,
+    tint: `hsla(${hue}, 60%, 50%, 0.04)`,
+    border: `hsla(${hue}, 70%, 60%, 0.45)`,
+  }
+}

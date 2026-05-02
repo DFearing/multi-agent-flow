@@ -1,12 +1,14 @@
 "use client"
 
-import { memo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
 import { agentCost } from "./canvas/draw-cost"
 import { SessionTabs } from "./session-tabs"
 import { FloatingPanel } from "./floating-panel"
 import { usePanelLayout } from "@/hooks/use-panel-layout"
+import type { WorkspaceFilterAPI } from "@/hooks/use-workspace-filter"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
@@ -89,10 +91,15 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
 export interface TopBarProps {
   // Session tabs
   sessions: SessionInfo[]
+  /** All known sessions (incl. hidden-by-filter). Used by the Workspaces
+   *  popover so counts and the per-row "clear stale" action see workspaces
+   *  the user has filtered out. */
+  allSessions: SessionInfo[]
   selectedSessionId: string | null
   sessionsWithActivity: Set<string>
   onSelectSession: (id: string) => void
   onCloseSession: (id: string) => void
+  onRemoveSession: (id: string) => void
   // Connection
   isVSCode: boolean
   connectionStatus: ConnectionStatus
@@ -105,6 +112,7 @@ export interface TopBarProps {
   showCostOverlay: boolean
   showTimeline: boolean
   isMuted: boolean
+  workspaceFilter: WorkspaceFilterAPI
   onTogglePanel: (panel: 'files' | 'transcript' | 'cost') => void
   onToggleTimeline: () => void
   onToggleMute: () => void
@@ -113,11 +121,12 @@ export interface TopBarProps {
 }
 
 export const TopBar = memo(function TopBar({
-  sessions, selectedSessionId, sessionsWithActivity,
-  onSelectSession, onCloseSession,
+  sessions, allSessions, selectedSessionId, sessionsWithActivity,
+  onSelectSession, onCloseSession, onRemoveSession,
   isVSCode, connectionStatus,
   agentCount, totalTokens,
   showFileAttention, showTranscript, showCostOverlay, showTimeline, isMuted,
+  workspaceFilter,
   onTogglePanel, onToggleTimeline, onToggleMute, onUiClick,
 }: TopBarProps) {
   const { resetLayout, saveLayout, hardResetLayout, instanceId, hostId, otherInstances } = usePanelLayout()
@@ -217,6 +226,11 @@ export const TopBar = memo(function TopBar({
           <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
             {isMuted ? <MutedIcon /> : <UnmutedIcon />}
           </ToggleButton>
+          <WorkspaceFilterButton
+            workspaceFilter={workspaceFilter}
+            sessions={allSessions}
+            onRemoveSession={onRemoveSession}
+          />
           <ToggleButton active={false} onClick={() => { onUiClick?.('save'); saveLayout() }}>Save UI</ToggleButton>
           <ToggleButton active={false} onClick={() => { onUiClick?.('reset'); handleReset() }}>Reset UI</ToggleButton>
         </div>
@@ -224,3 +238,216 @@ export const TopBar = memo(function TopBar({
     </FloatingPanel>
   )
 })
+
+// ─── Workspace filter button + popover ──────────────────────────────────────
+
+function WorkspaceFilterButton({
+  workspaceFilter,
+  sessions,
+  onRemoveSession,
+}: {
+  workspaceFilter: WorkspaceFilterAPI
+  sessions: SessionInfo[]
+  onRemoveSession: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  // Anchored to the button via getBoundingClientRect; rendered through a
+  // portal so the FloatingPanel's `overflow: hidden` doesn't clip it.
+  const buttonRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [anchorRect, setAnchorRect] = useState<{ top: number; right: number } | null>(null)
+  const { knownWorkspaces, isVisible, setVisibility, showAll, isolate } = workspaceFilter
+
+  useEffect(() => {
+    if (!open) { setAnchorRect(null); return }
+    const update = () => {
+      const r = buttonRef.current?.getBoundingClientRect()
+      if (r) setAnchorRect({ top: r.bottom + 6, right: window.innerWidth - r.right })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (buttonRef.current?.contains(target)) return
+      if (popoverRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    window.addEventListener('mousedown', handler)
+    return () => window.removeEventListener('mousedown', handler)
+  }, [open])
+
+  // Per-cwd: total sessions, and how many of those aren't actively
+  // broadcasting (status !== 'active'). The latter is what the "clear" button
+  // removes from the registry.
+  const { totals, stale } = useMemo(() => {
+    const t = new Map<string, number>()
+    const s = new Map<string, number>()
+    for (const sess of sessions) {
+      if (!sess.cwd) continue
+      t.set(sess.cwd, (t.get(sess.cwd) ?? 0) + 1)
+      if (sess.status !== 'active') s.set(sess.cwd, (s.get(sess.cwd) ?? 0) + 1)
+    }
+    return { totals: t, stale: s }
+  }, [sessions])
+
+  const clearStale = useCallback((cwd: string) => {
+    for (const sess of sessions) {
+      if (sess.cwd === cwd && sess.status !== 'active') onRemoveSession(sess.id)
+    }
+  }, [sessions, onRemoveSession])
+
+  const hiddenCount = knownWorkspaces.filter(w => !isVisible(w)).length
+  const labelStr = hiddenCount > 0 ? `Workspaces (${hiddenCount} hidden)` : 'Workspaces'
+
+  const popoverContent = (
+    <div
+      ref={popoverRef}
+      style={{
+        position: 'fixed',
+        top: anchorRect?.top ?? 0,
+        right: anchorRect?.right ?? 0,
+        minWidth: 320,
+        maxHeight: 360,
+        overflowY: 'auto',
+        padding: 8,
+        background: COLORS.panelBg,
+        border: `1px solid ${COLORS.glassBorder}`,
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+        zIndex: 99999,
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+      }}
+    >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-mono" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
+              SHOW WORKSPACES
+            </span>
+            <button
+              onClick={showAll}
+              className="text-[9px] font-mono"
+              style={{ color: COLORS.holoBase, background: 'none', border: 'none', cursor: 'pointer' }}
+            >
+              show all
+            </button>
+          </div>
+
+          {knownWorkspaces.length === 0 ? (
+            <div className="text-[10px] font-mono py-2 px-1" style={{ color: COLORS.textMuted }}>
+              No workspaces detected yet. Sessions from new cwds will appear here.
+            </div>
+          ) : (
+            knownWorkspaces.map(cwd => {
+              const visible = isVisible(cwd)
+              const total = totals.get(cwd) ?? 0
+              const staleCount = stale.get(cwd) ?? 0
+              const active = total - staleCount
+              return (
+                <div
+                  key={cwd}
+                  className="flex items-center gap-2 py-1 px-1 rounded"
+                  style={{
+                    cursor: 'pointer',
+                    background: visible ? 'transparent' : COLORS.holoBg03,
+                    opacity: visible ? 1 : 0.55,
+                  }}
+                  onClick={() => setVisibility(cwd, !visible)}
+                  title={cwd}
+                >
+                  <input
+                    type="checkbox"
+                    checked={visible}
+                    onChange={() => { /* handled by parent click */ }}
+                    onClick={e => e.stopPropagation()}
+                    style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
+                  />
+                  <span
+                    className="flex-1 text-[10px] font-mono truncate"
+                    style={{ color: visible ? COLORS.textPrimary : COLORS.textMuted }}
+                  >
+                    {shortenPath(cwd)}
+                  </span>
+                  <span
+                    className="text-[9px] font-mono"
+                    style={{ color: COLORS.textMuted }}
+                    title={`${active} active, ${staleCount} stale`}
+                  >
+                    {total > 0 ? (
+                      <>
+                        <span style={{ color: active > 0 ? COLORS.complete : COLORS.textMuted }}>{active}</span>
+                        {staleCount > 0 && <span style={{ color: COLORS.textMuted }}>{` +${staleCount}`}</span>}
+                      </>
+                    ) : '—'}
+                  </span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); clearStale(cwd) }}
+                    disabled={staleCount === 0}
+                    title={staleCount > 0
+                      ? `Remove ${staleCount} inactive session${staleCount === 1 ? '' : 's'}`
+                      : 'No inactive sessions to clear'}
+                    className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                    style={{
+                      background: staleCount > 0 ? COLORS.holoBg05 : 'transparent',
+                      border: `1px solid ${staleCount > 0 ? COLORS.holoBorder06 : 'transparent'}`,
+                      color: staleCount > 0 ? COLORS.textPrimary : COLORS.textMuted + '60',
+                      cursor: staleCount > 0 ? 'pointer' : 'default',
+                      opacity: staleCount > 0 ? 1 : 0.4,
+                    }}
+                  >
+                    clear
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); isolate(cwd) }}
+                    title="Show only this workspace"
+                    className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                    style={{
+                      background: COLORS.holoBg05,
+                      border: `1px solid ${COLORS.holoBorder06}`,
+                      color: COLORS.textMuted,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    only
+                  </button>
+                </div>
+              )
+            })
+          )}
+    </div>
+  )
+
+  return (
+    <>
+      <div ref={buttonRef} style={{ display: 'inline-flex' }}>
+        <ToggleButton active={hiddenCount > 0} onClick={() => setOpen(o => !o)}>
+          {labelStr}
+        </ToggleButton>
+      </div>
+      {open && anchorRect && typeof document !== 'undefined' && createPortal(popoverContent, document.body)}
+    </>
+  )
+}
+
+/** Trim home prefix and middle path segments so long cwds stay readable. */
+function shortenPath(p: string): string {
+  const home = '/home/'
+  let s = p
+  if (s.startsWith(home)) {
+    const slash = s.indexOf('/', home.length)
+    s = slash > 0 ? '~' + s.slice(slash) : '~'
+  }
+  if (s.length <= 48) return s
+  // Keep first segment and last two segments, ellipsize the middle.
+  const parts = s.split('/').filter(Boolean)
+  if (parts.length <= 3) return s
+  return `${parts[0]}/…/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
+}

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { Agent, type AgentState } from '@/lib/agent-types'
-import { COLORS, ROLE_COLORS, getStateColor } from '@/lib/colors'
+import { COLORS, ROLE_COLORS, colorForSession, getStateColor } from '@/lib/colors'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { useClickOutside } from '@/hooks/use-click-outside'
 import { useVirtualList } from '@/hooks/use-virtual-list'
@@ -11,6 +11,10 @@ import { FloatingPanel } from './floating-panel'
 interface MessageFeedPanelProps {
   conversations: Map<string, ConversationMessage[]>
   agents: Map<string, Agent>
+  /** agentId → sessionId, so each row can render a colored dot identifying
+   *  which session it came from. Only matters when conversations span more
+   *  than one session; falls back to no dot when missing. */
+  agentToSession?: Map<string, string>
   onAgentClick: (agentId: string | null) => void
   selectedAgentId: string | null
 }
@@ -31,6 +35,7 @@ const MESSAGE_GAP = 4
 export function MessageFeedPanel({
   conversations,
   agents,
+  agentToSession,
   onAgentClick,
   selectedAgentId,
 }: MessageFeedPanelProps) {
@@ -283,22 +288,27 @@ export function MessageFeedPanel({
           ) : (
             <div style={{ height: totalHeight, position: 'relative' }}>
               <div style={{ position: 'absolute', top: offsetTop, left: 0, right: 0 }}>
-                {visibleItems.map((msg) => (
-                  <div
-                    key={msg.id}
-                    ref={(el) => measureRef(msg.id, el)}
-                    style={{ marginBottom: MESSAGE_GAP }}
-                  >
-                    <MessageRow
-                      message={msg}
-                      agentId={msg.agentId}
-                      agentName={agents.get(msg.agentId)?.name ?? msg.agentId}
-                      showAgent={activeTab === 'all'}
-                      isSelected={selectedAgentId === msg.agentId}
-                      onClick={() => { onAgentClick(msg.agentId); setExpanded(false) }}
-                    />
-                  </div>
-                ))}
+                {visibleItems.map((msg) => {
+                  const sid = agentToSession?.get(msg.agentId)
+                  const sessionDot = sid ? colorForSession(sid).accent : null
+                  return (
+                    <div
+                      key={msg.id}
+                      ref={(el) => measureRef(msg.id, el)}
+                      style={{ marginBottom: MESSAGE_GAP }}
+                    >
+                      <MessageRow
+                        message={msg}
+                        agentId={msg.agentId}
+                        agentName={agents.get(msg.agentId)?.name ?? msg.agentId}
+                        showAgent={activeTab === 'all'}
+                        isSelected={selectedAgentId === msg.agentId}
+                        sessionDot={sessionDot}
+                        onClick={() => { onAgentClick(msg.agentId); setExpanded(false) }}
+                      />
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -342,12 +352,15 @@ function TabButton({ label, active, onClick, color, hasUnread }: {
 
 const MESSAGE_LINE_CLAMP = 3
 
-function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClick }: {
+function MessageRow({ message, agentId, agentName, showAgent, isSelected, sessionDot, onClick }: {
   message: ConversationMessage
   agentId: string
   agentName: string
   showAgent: boolean
   isSelected: boolean
+  /** Per-session accent color, rendered as a small dot in the header. Null
+   *  when there's only one session (or the parent didn't pass agentToSession). */
+  sessionDot: string | null
   onClick: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -383,6 +396,19 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
     >
       {/* Header row */}
       <div className="flex items-center gap-1.5 mb-0.5">
+        {sessionDot && (
+          <span
+            aria-hidden
+            style={{
+              display: 'inline-block',
+              width: 6, height: 6,
+              borderRadius: '50%',
+              background: sessionDot,
+              flexShrink: 0,
+              boxShadow: `0 0 4px ${sessionDot}`,
+            }}
+          />
+        )}
         <span className="text-[9px] font-mono font-semibold" style={{ color: role.text + '90' }}>
           {role.label}
         </span>

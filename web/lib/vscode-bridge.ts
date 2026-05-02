@@ -98,7 +98,7 @@ class VSCodeBridge {
 
       case 'session-updated':
         for (const cb of this.sessionListeners) {
-          cb('updated', { sessionId: data.sessionId, label: data.label })
+          cb('updated', { sessionId: data.sessionId, label: data.label, cwd: data.cwd })
         }
         break
     }
