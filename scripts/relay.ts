@@ -494,16 +494,21 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }
 
-      // Replay buffered events for the most recent active session
+      // Replay buffered events for every known session — each event carries
+      // its own sessionId so the client routes them into the right per-session
+      // buffer. Send most-recently-active first so the auto-selected session
+      // hydrates before the others. Necessary for multi-canvas UIs that show
+      // every session at once; the old "most recent only" behavior left other
+      // canvases blank because their agent_spawn was in the past.
       const sorted = [...sessionList].sort((a, b) => {
         const aActive = a.status === 'active' ? 1 : 0
         const bActive = b.status === 'active' ? 1 : 0
         if (aActive !== bActive) return bActive - aActive
         return b.lastActivityTime - a.lastActivityTime
       })
-      if (sorted.length > 0) {
-        const buffered = eventBuffer.get(sorted[0].id)
-        if (buffered) {
+      for (const s of sorted) {
+        const buffered = eventBuffer.get(s.id)
+        if (buffered && buffered.length > 0) {
           sendSSE(res, { type: 'agent-event-batch', events: buffered })
         }
       }
