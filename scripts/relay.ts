@@ -22,6 +22,7 @@ import {
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
 import type { TelemetryClient } from './telemetry'
+import { RingBuffer } from '../web/lib/ring-buffer'
 
 const MAX_EVENT_BUFFER = 5000
 const DISCOVERY_DIR = path.join(os.homedir(), '.claude', 'agent-flow')
@@ -77,7 +78,7 @@ function broadcast(data: string) {
 
 // ─── Event buffering ────────────────────────────────────────────────────────
 
-const eventBuffer = new Map<string, AgentEvent[]>()
+const eventBuffer = new Map<string, RingBuffer<AgentEvent>>()
 
 /** Per-agent lifecycle events preserved outside the 5000-event buffer cap so a
  *  late-connecting client can still reconstruct the agent window even when the
@@ -154,12 +155,12 @@ function broadcastEvent(event: AgentEvent) {
   log(`[event] ${event.type} (session ${sid})`)
 
   if (event.sessionId) {
-    let buf = eventBuffer.get(event.sessionId) || []
-    buf.push(event)
-    if (buf.length > MAX_EVENT_BUFFER) {
-      buf = buf.slice(buf.length - MAX_EVENT_BUFFER)
+    let buf = eventBuffer.get(event.sessionId)
+    if (!buf) {
+      buf = new RingBuffer<AgentEvent>(MAX_EVENT_BUFFER)
+      eventBuffer.set(event.sessionId, buf)
     }
-    eventBuffer.set(event.sessionId, buf)
+    buf.push(event)
     updateAgentSnapshot(event)
   }
 
@@ -577,20 +578,55 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         if (aActive !== bActive) return bActive - aActive
         return b.lastActivityTime - a.lastActivityTime
       })
-      for (const s of sorted) {
-        const buffered = eventBuffer.get(s.id)
-        if (buffered && buffered.length > 0) {
-          sendSSE(res, { type: 'agent-event-batch', events: buffered })
+      // Stream buffered events in chunks of ~100 to avoid a single giant
+      // JSON.stringify of the full 5 000-event buffer.
+      const REPLAY_CHUNK_SIZE = 100
+      const chunkedSessions = sorted.filter(s => {
+        const buf = eventBuffer.get(s.id)
+        return buf && buf.length > 0
+      })
+
+      if (chunkedSessions.length > 0) {
+        let sessionIdx = 0
+        let eventIdx = 0
+
+        const sendNextChunk = () => {
+          if (!sseClients.has(res)) return // client disconnected
+          while (sessionIdx < chunkedSessions.length) {
+            const buf = eventBuffer.get(chunkedSessions[sessionIdx].id)
+            if (!buf || eventIdx >= buf.length) {
+              sessionIdx++
+              eventIdx = 0
+              continue
+            }
+            const chunk: AgentEvent[] = []
+            const end = Math.min(eventIdx + REPLAY_CHUNK_SIZE, buf.length)
+            for (let i = eventIdx; i < end; i++) {
+              const evt = buf.get(i)
+              if (evt) chunk.push(evt)
+            }
+            eventIdx = end
+            if (chunk.length > 0) {
+              sendSSE(res, { type: 'agent-event-batch', events: chunk })
+            }
+            if (eventIdx < buf.length) {
+              setImmediate(sendNextChunk)
+              return
+            }
+            // Finished this session's buffered chunks — replay the preserved
+            // per-agent lifecycle snapshot so any agent whose spawn aged out
+            // of the 5000-cap ring still materializes. Handlers are idempotent
+            // (handleAgentSpawn reactivates if existing) so duplicates against
+            // the buffer are harmless.
+            const snapshot = snapshotEventsForSession(chunkedSessions[sessionIdx].id)
+            if (snapshot.length > 0) {
+              sendSSE(res, { type: 'agent-event-batch', events: snapshot })
+            }
+            sessionIdx++
+            eventIdx = 0
+          }
         }
-        // Replay preserved per-agent lifecycle events last so any agent whose
-        // spawn aged out of the 5000-cap buffer still materializes. Handlers
-        // are idempotent (handleAgentSpawn reactivates if existing) and the
-        // snapshot is always at least as fresh as the buffer, so a duplicate
-        // context_update here just confirms the latest tokens reading.
-        const snapshot = snapshotEventsForSession(s.id)
-        if (snapshot.length > 0) {
-          sendSSE(res, { type: 'agent-event-batch', events: snapshot })
-        }
+        sendNextChunk()
       }
     },
 
