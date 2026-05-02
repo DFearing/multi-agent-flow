@@ -64,4 +64,20 @@ export class BloomRenderer {
   setIntensity(intensity: number): void {
     this.intensity = Math.max(0, Math.min(1, intensity))
   }
+
+  /** Composite the most recent bloom result onto the target.
+   *  Useful for throttled rendering: run apply() on render frames, then
+   *  call applyCache() on skip frames to blit the last bloom without
+   *  re-running the blur pipeline. */
+  applyCache(sourceCanvas: HTMLCanvasElement, targetCtx: CanvasRenderingContext2D): void {
+    const w = this.tempCanvas.width
+    const h = this.tempCanvas.height
+    if (w === 0 || h === 0 || !this.enabled) return
+
+    targetCtx.save()
+    targetCtx.globalCompositeOperation = 'lighter'
+    targetCtx.globalAlpha = this.intensity
+    targetCtx.drawImage(this.tempCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height)
+    targetCtx.restore()
+  }
 }

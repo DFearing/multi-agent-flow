@@ -48,6 +48,7 @@ interface SessionCanvasPanelProps {
   showHexGrid: boolean
   showCostOverlay: boolean
   effects: EffectToggles
+  bloomThrottle: number
   zoomToFitTrigger: number
   pauseAutoFit: boolean
   getSessionEventLog: (sessionId: string) => readonly SimulationEvent[]
@@ -66,7 +67,7 @@ function SessionCanvasPanelImpl({
   sessionLabel,
   slot,
   selectedAgentId, hoveredAgentId, selectedToolCallId, selectedDiscoveryId,
-  showStats, showHexGrid, showCostOverlay, effects,
+  showStats, showHexGrid, showCostOverlay, effects, bloomThrottle,
   zoomToFitTrigger, pauseAutoFit,
   getSessionEventLog,
   onAgentClick, onAgentHover,
@@ -304,6 +305,7 @@ function SessionCanvasPanelImpl({
               showStats={showStats}
               showHexGrid={showHexGrid}
               bloomEnabled={effects.bloom}
+              bloomThrottle={bloomThrottle}
               zoomToFitTrigger={combinedZoomToFitTrigger}
               pauseAutoFit={pauseAutoFit}
               onAgentClick={(id) => onAgentClick(id, sessionId)}

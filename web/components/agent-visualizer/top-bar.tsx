@@ -11,7 +11,7 @@ import { FPSIndicator } from "./fps-indicator"
 import { usePanelLayout } from "@/hooks/use-panel-layout"
 import type { WorkspaceFilterAPI } from "@/hooks/use-workspace-filter"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
-import { FRAME_CAP_OPTIONS, EFFECT_LABELS, type EffectToggles } from "@/hooks/use-perf-settings"
+import { FRAME_CAP_OPTIONS, BLOOM_THROTTLE_OPTIONS, EFFECT_LABELS, type EffectToggles } from "@/hooks/use-perf-settings"
 import { IS_PIXI_RENDERER } from "@/lib/renderer-mode"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
@@ -142,6 +142,8 @@ export interface TopBarProps {
   onFrameCapChange: (fps: number) => void
   effects: EffectToggles
   onEffectChange: (key: keyof EffectToggles, value: boolean) => void
+  bloomThrottle: number
+  onBloomThrottleChange: (value: number) => void
   /** Session ids whose canvas the user has ✕-closed. The top bar renders a
    *  chip per id so they can be reopened via onShowCanvas. */
   hiddenCanvases?: ReadonlySet<string>
@@ -163,6 +165,7 @@ export const TopBar = memo(function TopBar({
   hiddenCanvases, onShowCanvas,
   onTogglePanel, onToggleTimeline, onToggleMute, onUiClick,
   frameCap, onFrameCapChange, effects, onEffectChange,
+  bloomThrottle, onBloomThrottleChange,
 }: TopBarProps) {
   const { resetLayout, saveLayout, hardResetLayout, tilePanels, instanceId, hostId, otherInstances } = usePanelLayout()
   const resetClickRef = useRef(0)
@@ -244,6 +247,8 @@ export const TopBar = memo(function TopBar({
             onFrameCapChange={onFrameCapChange}
             effects={effects}
             onEffectChange={onEffectChange}
+            bloomThrottle={bloomThrottle}
+            onBloomThrottleChange={onBloomThrottleChange}
           />
           {isVSCode && <ConnectionIndicator status={connectionStatus} />}
 
@@ -318,11 +323,15 @@ function PerfButton({
   onFrameCapChange,
   effects,
   onEffectChange,
+  bloomThrottle,
+  onBloomThrottleChange,
 }: {
   frameCap: number
   onFrameCapChange: (fps: number) => void
   effects: EffectToggles
   onEffectChange: (key: keyof EffectToggles, value: boolean) => void
+  bloomThrottle: number
+  onBloomThrottleChange: (value: number) => void
 }) {
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLDivElement>(null)
@@ -425,6 +434,29 @@ function PerfButton({
             <span className="text-[10px] font-mono">{EFFECT_LABELS[key]}</span>
           </label>
         ))}
+      {effects.bloom && (
+        <>
+          <div className="text-[10px] font-mono mt-3 mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
+            BLOOM RATE
+          </div>
+          <select
+            value={bloomThrottle}
+            onChange={(e) => onBloomThrottleChange(Number(e.target.value))}
+            className="w-full font-mono text-[11px] px-2 py-1 rounded mb-1"
+            style={{
+              background: COLORS.toggleInactive,
+              border: `1px solid ${COLORS.toggleBorder}`,
+              color: COLORS.textPrimary,
+              cursor: 'pointer',
+            }}
+          >
+            {BLOOM_THROTTLE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </>
+      )}
+
       <div className="text-[9px] font-mono mt-2 pt-2" style={{ color: COLORS.textMuted, borderTop: `1px solid ${COLORS.holoBorder06}` }}>
         {showAllEffects
           ? 'Lower cap saves power; turning effects off cuts per-frame work.'

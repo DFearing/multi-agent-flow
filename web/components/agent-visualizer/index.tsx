@@ -176,7 +176,7 @@ function AgentVisualizerInner() {
   // Performance settings: persisted frame-rate cap + per-effect toggles.
   // The cap is pushed into the shared SimulationManager so the rAF loop
   // throttles itself; effect toggles flow as props down to PixiCanvas.
-  const { frameCap, setFrameCap, effects, setEffect } = usePerfSettings()
+  const { frameCap, setFrameCap, effects, setEffect, bloomThrottle, setBloomThrottle } = usePerfSettings()
   useEffect(() => {
     manager.setFrameCap(frameCap)
   }, [manager, frameCap])
@@ -411,6 +411,7 @@ function AgentVisualizerInner() {
             showHexGrid={showHexGrid}
             showCostOverlay={showCostOverlay}
             effects={effects}
+            bloomThrottle={bloomThrottle}
             zoomToFitTrigger={zoomToFitTrigger}
             pauseAutoFit={selection.contextMenu !== null}
             getSessionEventLog={bridge.getSessionEventLog}
@@ -544,6 +545,8 @@ function AgentVisualizerInner() {
         onFrameCapChange={setFrameCap}
         effects={effects}
         onEffectChange={setEffect}
+        bloomThrottle={bloomThrottle}
+        onBloomThrottleChange={setBloomThrottle}
       />
     </div>
     </OpenFileProvider>

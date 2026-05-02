@@ -13,6 +13,17 @@ export const FRAME_CAP_OPTIONS: ReadonlyArray<{ value: number; label: string }> 
   { value: 15,  label: '15 FPS' },
 ]
 
+// ─── Bloom throttle ────────────────────────────────────────────────────────
+// Run the bloom post-processing pass every Nth frame, caching the last result
+// for intermediate frames.  `1` = every frame (default, no change in visual).
+// Higher values reduce bloom CPU/GPU cost proportionally.
+export const BLOOM_THROTTLE_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1, label: 'Every frame' },
+  { value: 2, label: 'Every 2nd frame (~50% saving)' },
+  { value: 3, label: 'Every 3rd frame (~67% saving)' },
+  { value: 4, label: 'Every 4th frame (~75% saving)' },
+]
+
 // ─── Effects ────────────────────────────────────────────────────────────────
 // Each toggle controls one rendering feature that can be disabled to reduce
 // per-frame GPU/CPU cost. Defaults are "everything on" — matches current
@@ -48,6 +59,10 @@ export function usePerfSettings() {
     'agent-flow:effects:v1',
     DEFAULT_EFFECTS,
   )
+  const [bloomThrottle, setBloomThrottle] = usePersistedState<number>(
+    'agent-flow:bloom-throttle:v1',
+    1,
+  )
 
   // Tolerate older persisted shapes by merging with defaults — adding a new
   // toggle later shouldn't blank out the saved value for the existing ones.
@@ -60,5 +75,5 @@ export function usePerfSettings() {
     [setEffects],
   )
 
-  return { frameCap, setFrameCap, effects: safeEffects, setEffect }
+  return { frameCap, setFrameCap, effects: safeEffects, setEffect, bloomThrottle, setBloomThrottle }
 }
