@@ -460,15 +460,19 @@ function AgentVisualizerInner() {
         )
       })}
 
-      <MessageFeedPanel
-        conversations={feedConversations}
-        agents={feedAgents}
-        agentToSession={agentToSession}
-        onAgentClick={selection.handleAgentClick}
-        selectedAgentId={selection.selectedAgentId}
-        visible={showMessageFeed}
-        onClose={() => setShowMessageFeed(false)}
-      />
+      {/* Gate at the parent so the panel unmounts when hidden — its expensive
+       *  per-conversation memos and effects don't run while the user has it
+       *  closed. */}
+      {showMessageFeed && (
+        <MessageFeedPanel
+          conversations={feedConversations}
+          agents={feedAgents}
+          agentToSession={agentToSession}
+          onAgentClick={selection.handleAgentClick}
+          selectedAgentId={selection.selectedAgentId}
+          onClose={() => setShowMessageFeed(false)}
+        />
+      )}
 
       {/* Agent detail card (floating panel) — closeable independently of the chat. */}
       {selectedAgent && selection.selectedAgentWorldPos && !detailCardHidden && (

@@ -1,10 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Agent, type AgentState } from '@/lib/agent-types'
 import { COLORS, ROLE_COLORS, colorForSession, getStateColor } from '@/lib/colors'
 import type { ConversationMessage } from '@/hooks/simulation/types'
-import { useClickOutside } from '@/hooks/use-click-outside'
 import { useVirtualList } from '@/hooks/use-virtual-list'
 import { mergeByTimestamp } from '@/lib/sort-utils'
 import { FloatingPanel } from './floating-panel'
@@ -18,18 +17,13 @@ interface MessageFeedPanelProps {
   agentToSession?: Map<string, string>
   onAgentClick: (agentId: string | null) => void
   selectedAgentId: string | null
-  visible?: boolean
   onClose?: () => void
 }
 
 // Only show text messages (assistant, user, thinking) — tool calls visible via agent selection
 const TEXT_TYPES = new Set(['assistant', 'user', 'thinking'])
 
-// Truncation limits for compact display
-const COLLAPSED_AGENT_NAME_MAX = 12
 const TAB_AGENT_NAME_MAX = 14
-const PREVIEW_MAX = 50
-const MESSAGE_TRUNCATE_MAX = 120
 
 const MESSAGE_GAP = 4
 
@@ -52,11 +46,8 @@ export function MessageFeedPanel({
   agentToSession,
   onAgentClick,
   selectedAgentId,
-  visible = true,
   onClose,
 }: MessageFeedPanelProps) {
-  const expanded = true
-  const setExpanded = (_: boolean) => {}
   const [activeTab, setActiveTab] = useState<string>('all')
   const [unread, setUnread] = useState<Set<string>>(new Set())
   const logRef = useRef<HTMLDivElement>(null)
@@ -71,28 +62,7 @@ export function MessageFeedPanel({
     return parts.sort().join('|')
   }, [agents])
 
-  // ── Latest message (cheap — used by collapsed view) ──
-  const latestMessage = useMemo(() => {
-    const currentAgents = agentsRef.current
-    let latest: (ConversationMessage & { agentId: string }) | null = null
-    for (const [agentId, msgs] of conversations) {
-      if (!currentAgents.has(agentId)) continue
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (!TEXT_TYPES.has(msgs[i].type)) continue
-        if (!latest || msgs[i].timestamp > latest.timestamp) {
-          latest = { ...msgs[i], agentId }
-        }
-        break
-      }
-    }
-    return latest
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversations, agentKey])
-
-  // ── Expensive memos — only compute when expanded ──
-
   const agentsWithMessages = useMemo(() => {
-    if (!expanded) return []
     const currentAgents = agentsRef.current
     const ids: string[] = []
     for (const [agentId, msgs] of conversations) {
@@ -107,7 +77,7 @@ export function MessageFeedPanel({
       return (agA?.name ?? a).localeCompare(agB?.name ?? b)
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expanded ? conversations : null, expanded, agentKey])
+  }, [conversations, agentKey])
 
   // Incremental message cache
   const messagesCacheRef = useRef<{
@@ -117,7 +87,6 @@ export function MessageFeedPanel({
   }>({ key: '', counts: new Map(), result: [] })
 
   const messages = useMemo(() => {
-    if (!expanded) return []
     const currentAgents = agentsRef.current
     const cache = messagesCacheRef.current
     const cacheKey = `${activeTab}:${agentKey}`
@@ -162,7 +131,7 @@ export function MessageFeedPanel({
     }
     return cache.result
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expanded ? conversations : null, expanded, activeTab, agentKey])
+  }, [conversations, activeTab, agentKey])
 
   // Collapse runs of consecutive identical messages — same agent, same role,
   // same content text — into a single row with a count badge. Tools and
@@ -202,7 +171,7 @@ export function MessageFeedPanel({
   // Track unread messages per agent tab
   useEffect(() => {
     const totalCount = Array.from(conversations.values()).reduce((n, msgs) => n + msgs.length, 0)
-    if (totalCount > prevCountRef.current && expanded) {
+    if (totalCount > prevCountRef.current) {
       for (const [agentId, msgs] of conversations) {
         if (agentId !== activeTab && activeTab !== 'all' && msgs.length > 0) {
           setUnread(prev => new Set(prev).add(agentId))
@@ -210,7 +179,7 @@ export function MessageFeedPanel({
       }
     }
     prevCountRef.current = totalCount
-  }, [conversations, expanded, activeTab])
+  }, [conversations, activeTab])
 
   useEffect(() => {
     if (activeTab !== 'all') {
@@ -234,47 +203,8 @@ export function MessageFeedPanel({
     }
   }, [selectedAgentId])
 
-  const panelRef = useRef<HTMLDivElement>(null)
-  const collapsePanel = useCallback(() => setExpanded(false), [])
-  useClickOutside(panelRef, collapsePanel)
+  if (agentsWithMessages.length === 0) return null
 
-  if (!visible) return null
-  if (!latestMessage && agentsWithMessages.length === 0) return null
-
-  // ── Collapsed ──
-  if (!expanded) {
-    if (!latestMessage) return null
-    const agent = agents.get(latestMessage.agentId)
-    const agentName = agent?.name ?? latestMessage.agentId
-    const role = ROLE_COLORS[latestMessage.type] ?? ROLE_COLORS.assistant
-    const preview = latestMessage.content.replace(/\n/g, ' ').slice(0, PREVIEW_MAX)
-
-    return (
-      <FloatingPanel
-        id="message-feed"
-        defaultRect={{ x: 12, y: 72, w: 320, h: 444 }}
-        minW={200}
-        minH={40}
-        onClose={onClose}
-      >
-        <div
-          className="cursor-pointer transition-all hover:scale-[1.02] px-3 py-2 flex items-center gap-2"
-          onClick={() => setExpanded(true)}
-        >
-          <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} />
-          <span className="text-[9px] font-mono font-semibold shrink-0" style={{ color: COLORS.textPrimary }}>
-            {agentName.length > COLLAPSED_AGENT_NAME_MAX ? agentName.slice(0, COLLAPSED_AGENT_NAME_MAX) + '..' : agentName}
-          </span>
-          <span className="text-[9px] font-mono truncate" style={{ color: role.text + 'cc' }}>
-            {preview}{latestMessage.content.length > PREVIEW_MAX ? '...' : ''}
-          </span>
-          <span className="text-[9px] shrink-0" style={{ color: COLORS.textMuted }}>▾</span>
-        </div>
-      </FloatingPanel>
-    )
-  }
-
-  // ── Expanded (virtualized) ──
   return (
     <FloatingPanel
       id="message-feed"
@@ -285,21 +215,9 @@ export function MessageFeedPanel({
       onClose={onClose}
     >
       <div
-        ref={panelRef}
         className="flex flex-col h-full"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Collapse button */}
-        <div className="flex items-center justify-end px-3 pt-1">
-          <button
-            onClick={() => setExpanded(false)}
-            className="text-[9px] transition-colors"
-            style={{ color: COLORS.textMuted }}
-          >
-            ▴
-          </button>
-        </div>
-
         {/* Agent Tabs (hidden when only 1 agent) */}
         {agentsWithMessages.length > 1 && (
         <div className="flex gap-0.5 px-2 pb-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
@@ -360,7 +278,7 @@ export function MessageFeedPanel({
                         isSelected={selectedAgentId === msg.agentId}
                         sessionDot={sessionDot}
                         repeatCount={msg.count}
-                        onClick={() => { onAgentClick(msg.agentId); setExpanded(false) }}
+                        onClick={() => onAgentClick(msg.agentId)}
                       />
                     </div>
                   )
