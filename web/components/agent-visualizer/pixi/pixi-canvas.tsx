@@ -18,6 +18,7 @@ import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
 import { createPixiApp, disposeTextureCache } from './pixi-app'
+import { EdgesLayer } from './edges-layer'
 import { ParticlesLayer } from './particles-layer'
 import { applyCameraTransform } from './camera'
 
@@ -70,6 +71,7 @@ export function PixiCanvas({
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
+  const edgesLayerRef = useRef<EdgesLayer | null>(null)
   const particlesLayerRef = useRef<ParticlesLayer | null>(null)
   const worldRef = useRef<Container | null>(null)
   const animRef = useRef<number>(0)
@@ -180,7 +182,7 @@ export function PixiCanvas({
   // Only the particles layer is functional in this spike.
 
   // TODO: background-layer (depth particles + hex grid)
-  // TODO: edges-layer (MeshRope or batched line geometry)
+  // edges-layer (MeshRope) — implemented
   // TODO: agents-layer (sprite + text)
   // TODO: tool-calls-layer (sprite + text)
   // TODO: discoveries-layer (sprite + text)
@@ -226,6 +228,11 @@ export function PixiCanvas({
       app.stage.addChild(world)
       worldRef.current = world
 
+      // Edges layer (behind particles in z-order, matching Canvas2D draw order)
+      const edgesLayer = new EdgesLayer()
+      world.addChild(edgesLayer.container)
+      edgesLayerRef.current = edgesLayer
+
       // Particles layer (functional)
       const particlesLayer = new ParticlesLayer()
       world.addChild(particlesLayer.container)
@@ -261,6 +268,15 @@ export function PixiCanvas({
         // Apply camera transform to the world container
         applyCameraTransform(world, transformRef.current)
 
+        // Update edges layer (drawn behind particles)
+        edgesLayer.update(
+          s.edges,
+          s.particles,
+          s.agents,
+          s.toolCalls,
+          timeRef.current,
+        )
+
         // Update particles layer
         particlesLayer.update(
           s.particles,
@@ -279,6 +295,10 @@ export function PixiCanvas({
     return () => {
       destroyed = true
       if (animRef.current) cancelAnimationFrame(animRef.current)
+      if (edgesLayerRef.current) {
+        edgesLayerRef.current.dispose()
+        edgesLayerRef.current = null
+      }
       if (particlesLayerRef.current) {
         particlesLayerRef.current.destroy()
         particlesLayerRef.current = null
