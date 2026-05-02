@@ -9,6 +9,7 @@ import type {
   SimulationEvent,
 } from '@/lib/agent-types'
 import type { SimulationNodeDatum, SimulationLinkDatum } from 'd3-force'
+import { RingBuffer } from '@/lib/ring-buffer'
 
 export interface SimulationState {
   agents: Map<string, Agent>
@@ -23,7 +24,7 @@ export interface SimulationState {
   isPlaying: boolean
   speed: number
   eventIndex: number
-  eventLog: SimulationEvent[]
+  eventLog: RingBuffer<SimulationEvent>
   /** Highest currentTime ever reached (for scrubber range in live mode) */
   maxTimeReached: number
 }
@@ -43,7 +44,7 @@ export function createEmptyState(overrides?: Partial<SimulationState>): Simulati
     isPlaying: false,
     speed: 1,
     eventIndex: 0,
-    eventLog: [],
+    eventLog: new RingBuffer<SimulationEvent>(MAX_EVENT_LOG),
     maxTimeReached: 0,
     ...overrides,
   }

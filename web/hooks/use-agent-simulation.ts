@@ -17,9 +17,15 @@ import { createEmptyState, MAX_EVENT_LOG } from './simulation/types'
 import { processEvent, type ProcessEventContext } from './simulation/process-event'
 import { computeNextFrame } from './simulation/animate'
 import { snapVisualState } from './simulation/snap-visual-state'
+import { RingBuffer } from '@/lib/ring-buffer'
 
 /** ms between React state updates — canvas uses frameRef for smooth 60fps */
 const UI_THROTTLE_MS = 250
+
+/** Maximum ms of event processing allowed per animation frame.
+ *  Remaining events are deferred to the next rAF to avoid frame drops. */
+const INGEST_BUDGET_MS = 5
+
 
 export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   const { useMockData = true, externalEvents, onExternalEventsConsumed, sessionFilter, sessionFilterRef: externalFilterRef, disable1MContext = false } = options
@@ -53,6 +59,15 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
    *  at most once per frame to coalesce burst spawns (e.g. SSE replay). */
   const forceSyncDirtyRef = useRef(false)
   const markForceSyncDirty = useCallback(() => { forceSyncDirtyRef.current = true }, [])
+  /** External events deferred from the previous frame due to time-slicing. */
+  const deferredEventsRef = useRef<SimulationEvent[]>([])
+
+  /** Produce an immutable structural snapshot of the current frameRef state.
+   *  The ring buffer is cloned so that future pushes do not mutate the snapshot. */
+  const commitSnapshot = useCallback((): SimulationState => {
+    const s = frameRef.current
+    return { ...s, eventLog: s.eventLog.clone() }
+  }, [])
 
   // ─── d3-force simulation ─────────────────────────────────────────────────
   useEffect(() => {
@@ -197,10 +212,19 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     lastTimeRef.current = timestamp
 
     // Snapshot and consume external events OUTSIDE the main processing
-    // to avoid React strict mode double-invocation clearing them
+    // to avoid React strict mode double-invocation clearing them.
+    // Merge any deferred events from the previous frame first.
     let capturedEvents: SimulationEvent[] | null = null
+    if (deferredEventsRef.current.length > 0) {
+      capturedEvents = deferredEventsRef.current
+      deferredEventsRef.current = []
+    }
     if (externalEvents && externalEvents.length > 0 && !useMockData) {
-      capturedEvents = externalEvents.slice()
+      if (capturedEvents) {
+        capturedEvents = capturedEvents.concat(externalEvents.slice())
+      } else {
+        capturedEvents = externalEvents.slice()
+      }
       onExternalEventsConsumed?.()
     }
 
@@ -214,29 +238,40 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     let maxT = Math.max(prev.maxTimeReached, newTime)
     let newEventIndex = prev.eventIndex
 
-    // Process events — thread state through each event
+    // Process events — mutate frameRef.current.eventLog in place via
+    // ring buffer push. No array concat / slice / state spread per event.
     let currentState = prev
-    const newEvents: SimulationEvent[] = []
+    let hadNewEvents = false
+    const ingestStart = performance.now()
 
     if (useMockData) {
       while (newEventIndex < MOCK_SCENARIO.length && MOCK_SCENARIO[newEventIndex].time <= newTime) {
+        if (performance.now() - ingestStart > INGEST_BUDGET_MS) break
         const evt = MOCK_SCENARIO[newEventIndex]
         currentState = processEventWithContext(evt, currentState)
-        newEvents.push(evt)
+        currentState.eventLog.push(evt)
+        hadNewEvents = true
         newEventIndex++
       }
     } else {
-      while (newEventIndex < currentState.eventLog.length && currentState.eventLog[newEventIndex].time <= newTime) {
-        const evt = currentState.eventLog[newEventIndex]
+      while (newEventIndex < currentState.eventLog.length) {
+        const evt = currentState.eventLog.get(newEventIndex)
+        if (!evt || evt.time > newTime) break
+        if (performance.now() - ingestStart > INGEST_BUDGET_MS) break
         currentState = processEventWithContext(evt, currentState)
         newEventIndex++
       }
     }
 
     // Process captured external events (snapshotted outside the main
-    // processing to avoid React strict mode double-invocation issues)
+    // processing to avoid React strict mode double-invocation issues).
+    // Time-sliced: if we exceed the budget, remaining events are deferred
+    // to the next rAF.
     if (capturedEvents) {
-      for (const event of capturedEvents) {
+      let i = 0
+      for (; i < capturedEvents.length; i++) {
+        if (performance.now() - ingestStart > INGEST_BUDGET_MS) break
+        const event = capturedEvents[i]
         const activeFilter = sessionFilterRef.current
         if (activeFilter && event.sessionId && event.sessionId !== activeFilter) {
           continue
@@ -245,7 +280,13 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
         const timedEvent = { ...event, time: eventTime }
         currentState = { ...currentState, currentTime: eventTime }
         currentState = processEventWithContext(timedEvent, currentState)
-        newEvents.push(timedEvent)
+        // Push directly into the ring buffer — O(1), no allocation
+        currentState.eventLog.push(timedEvent)
+        hadNewEvents = true
+      }
+      // Defer unprocessed events to next frame
+      if (i < capturedEvents.length) {
+        deferredEventsRef.current = capturedEvents.slice(i)
       }
       // Sync simulation clock to latest event so active state renders correctly
       newTime = Math.max(newTime, currentState.currentTime)
@@ -253,18 +294,9 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
 
     }
 
-    // Append new events to log
-    if (newEvents.length > 0) {
-      let newLog = currentState.eventLog.concat(newEvents)
-      if (newLog.length > MAX_EVENT_LOG) {
-        newLog = newLog.slice(newLog.length - MAX_EVENT_LOG)
-      }
-      // In mock mode, eventIndex tracks position in MOCK_SCENARIO (not the log).
-      // In live mode, eventIndex tracks position in the event log.
-      if (!useMockData) {
-        newEventIndex = newLog.length
-      }
-      currentState = { ...currentState, eventLog: newLog }
+    // In live mode, eventIndex tracks position in the event log.
+    if (hadNewEvents && !useMockData) {
+      newEventIndex = currentState.eventLog.length
     }
 
     currentState = { ...currentState, eventIndex: newEventIndex }
@@ -296,10 +328,11 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
       if (fs && fs.alpha() > fs.alphaMin()) fs.tick()
     }
 
-    // Throttle React re-renders — UI updates at ~4/sec, canvas stays smooth via frameRef
-    if (newEvents.length > 0) {
+    // Throttle React re-renders — UI updates at ~4/sec, canvas stays smooth via frameRef.
+    // commitSnapshot() produces an immutable copy so React can diff safely.
+    if (hadNewEvents) {
       if (!lastUIUpdateRef.current || timestamp - lastUIUpdateRef.current >= UI_THROTTLE_MS) {
-        setState(frameRef.current)
+        setState(commitSnapshot())
         lastUIUpdateRef.current = timestamp
       }
     }
@@ -366,9 +399,12 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     const conversations: SimulationState['conversations'] = new Map()
     for (const id of agents.keys()) conversations.set(id, [])
 
-    const eventLog = prev.eventLog.filter(e =>
-      e.type === 'agent_spawn' && agents.has(e.payload?.name as string)
-    )
+    const eventLog = new RingBuffer<SimulationEvent>(MAX_EVENT_LOG)
+    for (const e of prev.eventLog) {
+      if (e.type === 'agent_spawn' && agents.has(e.payload?.name as string)) {
+        eventLog.push(e)
+      }
+    }
 
     const next = {
       ...createEmptyState({ isPlaying: true, speed: prev.speed }),
@@ -401,11 +437,11 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
   /** Seek to a specific time — replays events from scratch up to targetTime */
   const seekToTime = useCallback((targetTime: number) => {
     const prev = frameRef.current
-    const events = useMockData ? MOCK_SCENARIO : prev.eventLog
+    const events = useMockData ? MOCK_SCENARIO : prev.eventLog.toArray()
 
     let replayState = createEmptyState({
       speed: prev.speed,
-      eventLog: prev.eventLog,
+      eventLog: prev.eventLog.clone(),
       maxTimeReached: prev.maxTimeReached,
     })
 
@@ -430,13 +466,15 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
 
   // ─── Session state save/restore ──────────────────────────────────────────
   const saveSnapshot = useCallback((): { simState: SimulationState; blockId: number } => ({
-    simState: frameRef.current,
+    simState: commitSnapshot(),
     blockId: blockIdCounter.current,
-  }), [])
+  }), [commitSnapshot])
 
   const restoreSnapshot = useCallback((snapshot: { simState: SimulationState; blockId: number }) => {
     blockIdCounter.current = snapshot.blockId
-    commitState({ ...snapshot.simState, isPlaying: true })
+    // Clone the event log so the restored snapshot remains immutable
+    const restored = { ...snapshot.simState, isPlaying: true, eventLog: snapshot.simState.eventLog.clone() }
+    commitState(restored)
     setTimeout(() => syncForceSimulation(snapshot.simState.agents, snapshot.simState.edges), 0)
   }, [syncForceSimulation, commitState])
 
