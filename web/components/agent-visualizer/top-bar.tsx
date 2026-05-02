@@ -12,6 +12,7 @@ import { usePanelLayout } from "@/hooks/use-panel-layout"
 import type { WorkspaceFilterAPI } from "@/hooks/use-workspace-filter"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 import { FRAME_CAP_OPTIONS, EFFECT_LABELS, type EffectToggles } from "@/hooks/use-perf-settings"
+import { IS_PIXI_RENDERER } from "@/lib/renderer-mode"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
 
@@ -355,7 +356,10 @@ function PerfButton({
     return () => window.removeEventListener('mousedown', handler)
   }, [open])
 
-  const offCount = Object.values(effects).filter(v => !v).length
+  // Effect toggles only flow into the Pixi renderer; on Canvas2D they're
+  // visible in the UI but no-ops, so we hide them entirely off the Pixi path.
+  const showEffects = IS_PIXI_RENDERER
+  const offCount = showEffects ? Object.values(effects).filter(v => !v).length : 0
   const capLabel = FRAME_CAP_OPTIONS.find(o => o.value === frameCap)?.label ?? 'Uncapped'
   const summary = offCount > 0
     ? `Perf · ${capLabel} · ${offCount} off`
@@ -398,26 +402,32 @@ function PerfButton({
         ))}
       </select>
 
-      <div className="text-[10px] font-mono mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
-        EFFECTS
-      </div>
-      {(Object.keys(EFFECT_LABELS) as Array<keyof EffectToggles>).map(key => (
-        <label
-          key={key}
-          className="flex items-center gap-2 py-1 px-1 rounded cursor-pointer"
-          style={{ color: effects[key] ? COLORS.textPrimary : COLORS.textMuted }}
-        >
-          <input
-            type="checkbox"
-            checked={effects[key]}
-            onChange={(e) => onEffectChange(key, e.target.checked)}
-            style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
-          />
-          <span className="text-[10px] font-mono">{EFFECT_LABELS[key]}</span>
-        </label>
-      ))}
+      {showEffects && (
+        <>
+          <div className="text-[10px] font-mono mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
+            EFFECTS
+          </div>
+          {(Object.keys(EFFECT_LABELS) as Array<keyof EffectToggles>).map(key => (
+            <label
+              key={key}
+              className="flex items-center gap-2 py-1 px-1 rounded cursor-pointer"
+              style={{ color: effects[key] ? COLORS.textPrimary : COLORS.textMuted }}
+            >
+              <input
+                type="checkbox"
+                checked={effects[key]}
+                onChange={(e) => onEffectChange(key, e.target.checked)}
+                style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
+              />
+              <span className="text-[10px] font-mono">{EFFECT_LABELS[key]}</span>
+            </label>
+          ))}
+        </>
+      )}
       <div className="text-[9px] font-mono mt-2 pt-2" style={{ color: COLORS.textMuted, borderTop: `1px solid ${COLORS.holoBorder06}` }}>
-        Lower cap saves power; turning effects off cuts per-frame work.
+        {showEffects
+          ? 'Lower cap saves power; turning effects off cuts per-frame work.'
+          : 'Lower cap saves power. (Effect toggles only apply on the WebGL renderer.)'}
       </div>
     </div>
   )
