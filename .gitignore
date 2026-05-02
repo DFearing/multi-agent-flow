@@ -30,3 +30,6 @@ extension/package-lock.json
 
 # Local dev server output
 .dev.log
+
+# Wire-format simulator output
+.sim-sessions/
