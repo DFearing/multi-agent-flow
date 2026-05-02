@@ -5,7 +5,7 @@ import {
 } from '@/lib/canvas-constants'
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
-import { getAgentGlowSprite, getScanlineSprite } from './render-cache'
+import { getAgentGlowSprite, getScanlineSprite, getTextSprite, drawTextSprite, getOverlaySprite, drawOverlaySprite, overlayKey } from './render-cache'
 
 let _claudeSparkPath: Path2D | null = null
 export function getClaudeSparkPath() {
@@ -76,12 +76,12 @@ export function drawContextComposition(
   ctx.roundRect(barX - 2, barY - 2, barWidth + 4, barHeight + 14, CONTEXT_BAR.borderRadius)
   ctx.fill()
 
-  // Label
-  ctx.fillStyle = COLORS.textMuted
-  ctx.font = `${CONTEXT_BAR.fontSize}px monospace`
-  ctx.textAlign = 'center'
+  // Label — cached text sprite to avoid per-frame fillText rasterization
+  const barFont = `${CONTEXT_BAR.fontSize}px monospace`
   const pct = Math.round((total / agent.tokensMax) * 100)
-  ctx.fillText(`${formatTokens(total)} / ${formatTokens(agent.tokensMax)} · ${pct}%`, agent.x, barY + barHeight + CONTEXT_BAR.labelPadding)
+  const barLabel = `${formatTokens(total)} / ${formatTokens(agent.tokensMax)} · ${pct}%`
+  const barSprite = getTextSprite(barLabel, barFont, COLORS.textMuted, 'center', 'top')
+  drawTextSprite(ctx, barSprite, agent.x, barY + barHeight + CONTEXT_BAR.labelPadding, 'center', 'top')
 
   // Segments
   const segments = contextSegments(bd)
@@ -164,13 +164,13 @@ export function drawContextRing(
     ctx.restore()
   }
 
-  // Percentage label when usage is high
+  // Percentage label when usage is high — cached text sprite
   if (usage > CONTEXT_RING.percentLabelThreshold) {
-    ctx.font = `${CONTEXT_BAR.fontSize}px monospace`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'bottom'
-    ctx.fillStyle = usage > CONTEXT_RING.criticalThreshold ? COLORS.error : usage > CONTEXT_RING.warningThreshold ? COLORS.tool : COLORS.textDim
-    ctx.fillText(`${Math.floor(usage * 100)}%`, agent.x, agent.y - radius - CONTEXT_RING.percentYOffset)
+    const pctFont = `${CONTEXT_BAR.fontSize}px monospace`
+    const pctColor = usage > CONTEXT_RING.criticalThreshold ? COLORS.error : usage > CONTEXT_RING.warningThreshold ? COLORS.tool : COLORS.textDim
+    const pctText = `${Math.floor(usage * 100)}%`
+    const pctSprite = getTextSprite(pctText, pctFont, pctColor, 'center', 'top')
+    drawTextSprite(ctx, pctSprite, agent.x, agent.y - radius - CONTEXT_RING.percentYOffset - pctSprite.height, 'center', 'top')
   }
 }
 
@@ -306,29 +306,46 @@ function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: numb
 }
 
 function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean) {
-  ctx.fillStyle = isHovered ? COLORS.textPrimary : COLORS.textDim
-  ctx.font = '10px monospace'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
+  const labelFont = '10px monospace'
+  const labelColor = isHovered ? COLORS.textPrimary : COLORS.textDim
+  ctx.font = labelFont // needed for truncateText measurement
   const maxLabelW = r * AGENT_DRAW.labelWidthMultiplier
   const agentLabel = truncateText(ctx, agent.name, maxLabelW)
-  ctx.fillText(agentLabel, agent.x, agent.y + r + AGENT_DRAW.labelYOffset)
+  const labelSprite = getTextSprite(agentLabel, labelFont, labelColor, 'center', 'top')
+  drawTextSprite(ctx, labelSprite, agent.x, agent.y + r + AGENT_DRAW.labelYOffset, 'center', 'top')
 }
 
 function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
   const sy = agent.y - r - STATS_OVERLAY.yOffset
-  ctx.fillStyle = COLORS.cardBgDark
-  ctx.beginPath()
-  ctx.roundRect(agent.x - STATS_OVERLAY.boxWidth / 2, sy, STATS_OVERLAY.boxWidth, STATS_OVERLAY.boxHeight, STATS_OVERLAY.borderRadius)
-  ctx.fill()
-  ctx.strokeStyle = COLORS.glassBorder
-  ctx.lineWidth = 0.5
-  ctx.stroke()
-  ctx.fillStyle = COLORS.textMuted
-  ctx.font = `${STATS_OVERLAY.fontSize}px monospace`
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillText(`${agent.toolCalls} tools \u00B7 ${agent.timeAlive.toFixed(1)}s`, agent.x, sy + STATS_OVERLAY.textPaddingY)
+  const overlayW = STATS_OVERLAY.boxWidth
+  const overlayH = STATS_OVERLAY.boxHeight
+
+  // Cache key: quantize timeAlive to 0.1s to avoid per-frame invalidation
+  const timeStr = agent.timeAlive.toFixed(1)
+  const dataHash = `stats|${agent.toolCalls}|${timeStr}`
+
+  const sprite = getOverlaySprite(
+    overlayKey('stats', agent.id), dataHash, overlayW, overlayH, undefined,
+    (offCtx) => {
+      offCtx.fillStyle = COLORS.cardBgDark
+      offCtx.beginPath()
+      offCtx.roundRect(0, 0, overlayW, overlayH, STATS_OVERLAY.borderRadius)
+      offCtx.fill()
+      offCtx.strokeStyle = COLORS.glassBorder
+      offCtx.lineWidth = 0.5
+      offCtx.stroke()
+      offCtx.fillStyle = COLORS.textMuted
+      offCtx.font = `${STATS_OVERLAY.fontSize}px monospace`
+      offCtx.textAlign = 'center'
+      offCtx.textBaseline = 'top'
+      offCtx.fillText(
+        `${agent.toolCalls} tools \u00B7 ${timeStr}s`,
+        overlayW / 2, STATS_OVERLAY.textPaddingY,
+      )
+    },
+  )
+
+  drawOverlaySprite(ctx, sprite, agent.x - overlayW / 2, sy)
 }
 
 export function drawAgents(

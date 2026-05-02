@@ -20,6 +20,7 @@ import {
   drawCostLabels,
   detectStateChanges as detectStateChangesPure,
   computeViewBounds,
+  pruneOverlayCache,
 } from './canvas/'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
@@ -338,6 +339,10 @@ export function AgentCanvas({
       }
 
       ctx.restore()
+
+      // Evict overlay cache entries for agents that completed / despawned.
+      // Uses a Set view of the current agent ids — cheap compared to the draw pass.
+      pruneOverlayCache(new Set(agents.keys()))
 
       if (bloomRef.current) bloomRef.current.apply(canvas, ctx)
 
