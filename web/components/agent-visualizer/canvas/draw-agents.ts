@@ -5,7 +5,7 @@ import {
 } from '@/lib/canvas-constants'
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
-import { getAgentGlowSprite, getScanlineSprite, getTextSprite, drawTextSprite, getOverlaySprite, drawOverlaySprite } from './render-cache'
+import { getAgentGlowSprite, getScanlineSprite, getTextSprite, drawTextSprite, getOverlaySprite, drawOverlaySprite, overlayKey } from './render-cache'
 
 let _claudeSparkPath: Path2D | null = null
 export function getClaudeSparkPath() {
@@ -325,7 +325,7 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
   const dataHash = `stats|${agent.toolCalls}|${timeStr}`
 
   const sprite = getOverlaySprite(
-    `stats-${agent.id}`, dataHash, overlayW, overlayH, 1,
+    overlayKey('stats', agent.id), dataHash, overlayW, overlayH, undefined,
     (offCtx) => {
       offCtx.fillStyle = COLORS.cardBgDark
       offCtx.beginPath()

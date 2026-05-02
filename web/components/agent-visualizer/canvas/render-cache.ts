@@ -146,7 +146,9 @@ let textSpriteAccessCounter = 0
  *               When "center", the sprite is rendered with the anchor at its
  *               center so callers can blit at (x - width/2, y).
  * @param baseline Text baseline (default "top")
- * @param dpr    Device pixel ratio (default 1)
+ * @param dpr    Device pixel ratio (defaults to window.devicePixelRatio).
+ *                If DPR changes at runtime (e.g. window moved between monitors),
+ *                new sprites are created at the new DPR; stale ones evict via LRU.
  */
 export function getTextSprite(
   text: string,
@@ -154,7 +156,7 @@ export function getTextSprite(
   color: string,
   align: CanvasTextAlign = 'left',
   baseline: CanvasTextBaseline = 'top',
-  dpr = 1,
+  dpr: number = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
 ): TextSprite {
   const key = `${text}|${font}|${color}|${align}|${baseline}|${dpr}`
   const cached = textSpriteCache.get(key)
@@ -258,6 +260,31 @@ export function drawTextSprite(
 // Caches the full stats overlay or cost label (box + text) per agent into an
 // off-screen canvas keyed by (agentId, dataHash). When data is unchanged
 // between frames, we just drawImage the cached overlay.
+//
+// Cache keys use a NUL (\0) delimiter between prefix and agentId so that
+// pruning can extract the agentId exactly, regardless of what characters
+// (including hyphens) the agentId contains.
+
+/** Separator between prefix and agentId in overlay cache keys. NUL cannot
+ *  appear in agent IDs (which are typically UUIDs or user-facing strings). */
+const OVERLAY_KEY_SEP = '\0'
+
+/**
+ * Build a deterministic overlay cache key from a prefix and agent id.
+ * Exported for use by callers and tests.
+ */
+export function overlayKey(prefix: string, agentId: string): string {
+  return prefix + OVERLAY_KEY_SEP + agentId
+}
+
+/**
+ * Extract the agentId from an overlay cache key. Returns `undefined` if the
+ * key doesn't contain the separator (defensive).
+ */
+function agentIdFromOverlayKey(key: string): string | undefined {
+  const idx = key.indexOf(OVERLAY_KEY_SEP)
+  return idx >= 0 ? key.slice(idx + 1) : undefined
+}
 
 interface OverlaySprite {
   canvas: HTMLCanvasElement
@@ -276,24 +303,24 @@ const overlayCache = new Map<string, OverlaySprite>()
 /**
  * Get or create a cached overlay sprite for an agent.
  *
- * @param agentId  Unique agent identifier (cache key)
+ * @param cacheKey Cache key built via `overlayKey(prefix, agentId)`.
  * @param dataHash String encoding the data values (e.g. toolCalls, timeAlive).
  *                 When this changes, the cache entry is invalidated.
  * @param width    Logical width of the overlay
  * @param height   Logical height of the overlay
- * @param dpr      Device pixel ratio
+ * @param dpr      Device pixel ratio (defaults to window.devicePixelRatio)
  * @param render   Callback to render the overlay into the provided context.
  *                 The context is already scaled by dpr. Draw at logical coords.
  */
 export function getOverlaySprite(
-  agentId: string,
+  cacheKey: string,
   dataHash: string,
   width: number,
   height: number,
-  dpr: number,
+  dpr: number = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
   render: (ctx: CanvasRenderingContext2D) => void,
 ): OverlaySprite {
-  const existing = overlayCache.get(agentId)
+  const existing = overlayCache.get(cacheKey)
   if (existing && existing.dataHash === dataHash && existing.dpr === dpr) {
     return existing
   }
@@ -315,7 +342,7 @@ export function getOverlaySprite(
   ctx.restore()
 
   const sprite: OverlaySprite = { canvas, width, height, dpr, dataHash }
-  overlayCache.set(agentId, sprite)
+  overlayCache.set(cacheKey, sprite)
   return sprite
 }
 
@@ -335,16 +362,36 @@ export function drawOverlaySprite(
  * Evict overlay cache entries for agents that no longer exist.
  * Call once per frame (or every N frames) with the current agents map.
  *
- * Cache keys are prefixed (e.g. "stats-agentId", "cost-agentId").
- * We extract the agent ID after the first hyphen and check against the
- * active set.
+ * Cache keys use a NUL separator (see `overlayKey`). The agentId is
+ * extracted precisely regardless of what characters the ID contains.
  */
 export function pruneOverlayCache(activeAgentIds: ReadonlySet<string>): void {
   for (const key of overlayCache.keys()) {
-    const dashIdx = key.indexOf('-')
-    const agentId = dashIdx >= 0 ? key.slice(dashIdx + 1) : key
-    if (!activeAgentIds.has(agentId)) {
+    const agentId = agentIdFromOverlayKey(key)
+    if (agentId === undefined || !activeAgentIds.has(agentId)) {
       overlayCache.delete(key)
     }
   }
+}
+
+/** Current number of entries in the overlay cache. Exposed for testing. */
+export function overlayCacheSize(): number {
+  return overlayCache.size
+}
+
+/** Clear all overlay cache entries. Exposed for testing. */
+export function _resetOverlayCacheForTest(): void {
+  overlayCache.clear()
+}
+
+/** Insert a stub overlay entry by key. Exposed for testing only — avoids
+ *  needing a real Canvas2D context in jsdom. */
+export function _insertOverlayStubForTest(key: string): void {
+  overlayCache.set(key, {
+    canvas: null as unknown as HTMLCanvasElement,
+    width: 0,
+    height: 0,
+    dpr: 1,
+    dataHash: '',
+  })
 }

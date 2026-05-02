@@ -3,7 +3,7 @@ import { COLORS } from '@/lib/colors'
 import { COST_RATE, COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { formatTokens } from '@/lib/utils'
 import { truncateText } from './draw-misc'
-import { getTextSprite, drawTextSprite, measureTextCached, getOverlaySprite, drawOverlaySprite } from './render-cache'
+import { getTextSprite, drawTextSprite, measureTextCached, getOverlaySprite, drawOverlaySprite, overlayKey } from './render-cache'
 
 export function agentCost(tokensUsed: number): number {
   return (tokensUsed / 1_000_000) * COST_RATE
@@ -75,7 +75,7 @@ export function drawCostLabels(
     const overlayW = Math.max(pillW, hasBar ? barW : 0) + 2 // 2px margin for stroke
 
     const sprite = getOverlaySprite(
-      `cost-${agent.id}`, dataHash, overlayW, overlayH + 2, 1,
+      overlayKey('cost', agent.id), dataHash, overlayW, overlayH + 2, undefined,
       (offCtx) => {
         const oPillX = (overlayW - pillW) / 2
 
