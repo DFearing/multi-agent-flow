@@ -6,11 +6,10 @@
  * Gated behind `?renderer=pixi`. Same prop contract as AgentCanvas so the
  * two are interchangeable in session-canvas-panel.tsx.
  *
- * Uses the shared Pixi renderer (single GL context). Each PixiCanvas
- * instance registers a viewport that owns:
+ * Uses the shared Pixi renderer (single GL context, multiView). Each
+ * PixiCanvas instance registers a viewport that owns:
  *   - A Container (scene-graph subtree with all layers)
- *   - A RenderTexture (off-screen render target)
- *   - A visible <canvas> element (receives blitted pixels each frame)
+ *   - A visible <canvas> element (rendered into directly each frame)
  *
  * Rendering layers (z-order):
  *   background -> edges -> tool-calls -> discoveries -> agents -> bubbles -> particles
@@ -130,7 +129,6 @@ export function PixiCanvas({
         const w = entry.contentRect.width
         const h = entry.contentRect.height
         setDimensions({ width: w, height: h })
-        // Resize the viewport's RenderTexture to match
         resizeViewport(viewportId, w, h)
       }
     })
@@ -424,7 +422,6 @@ export function PixiCanvas({
       worldRef.current = null
       viewportRef.current = null
 
-      // Deregister viewport (frees RenderTexture + stage)
       deregisterViewport(viewportId)
 
       // Release shared renderer (may destroy GL context if last viewport)
