@@ -3,6 +3,12 @@
 # Invoked by a systemd-run user unit (see bench/README.md "Scheduled reruns").
 # Appends new rows to runs.jsonl, then writes the updated summary.
 set -u
+
+# systemd-run --user inherits a minimal env — pnpm and other user-local
+# binaries are not on PATH by default. Add the standard user-local paths
+# explicitly so child processes (the sim spawns `pnpm`) can find them.
+export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
+
 cd "$(dirname "$0")"
 
 LOG="results/scheduled-rerun-$(date -u +%Y%m%dT%H%M%SZ).log"
