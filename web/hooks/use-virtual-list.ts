@@ -129,15 +129,43 @@ export function useVirtualList<T extends { id: string }>(
   const offsetTop = startIdx < offsets.length ? offsets[startIdx] : 0
 
   // ── Trigger re-render after measurements ──────────────────────────────────
-  const measureRef = useCallback((id: string, el: HTMLDivElement | null) => {
-    if (!el) return
-    const h = el.offsetHeight
-    if (heights.get(id) !== h) {
-      heights.set(id, h)
-      // Force re-render to recalculate layout with real heights
+  // Coalesce multiple height-change notifications into a single rAF tick
+  const rafIdRef = useRef(0)
+  const forceTick = useCallback(() => {
+    if (rafIdRef.current) return // already scheduled
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = 0
       setMeasureTick(n => n + 1)
+    })
+  }, [])
+
+  // Use refs so stable per-id callbacks always see latest values
+  const forceTickRef = useRef(forceTick)
+  forceTickRef.current = forceTick
+
+  // Cache per-id ref callbacks so React only fires them on real mount/unmount
+  const callbackCacheRef = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
+
+  const measureRef = useCallback((id: string): ((el: HTMLDivElement | null) => void) => {
+    let cached = callbackCacheRef.current.get(id)
+    if (!cached) {
+      cached = (el: HTMLDivElement | null) => {
+        if (!el) return
+        const h = el.offsetHeight
+        if (heights.get(id) !== h) {
+          heights.set(id, h)
+          forceTickRef.current()
+        }
+      }
+      callbackCacheRef.current.set(id, cached)
     }
+    return cached
   }, [heights])
+
+  // Cancel pending rAF on unmount
+  useEffect(() => {
+    return () => { if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current) }
+  }, [])
 
   // ── Auto-scroll after layout settles ──────────────────────────────────────
   useEffect(() => {
