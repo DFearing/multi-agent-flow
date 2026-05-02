@@ -57,6 +57,7 @@ let WARMUP_MS = 30_000
 let MEASURE_MS = 90_000
 let STACK_FILTER = null  // CLI: --stack A-base — limit to one stack
 let SIM_COUNT = 3        // concurrent sessions in the sim ('concurrent' scenario)
+let RENDERER = null      // CLI: --renderer pixi — opt into the WebGL canvas. Default = unset = Canvas2D.
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -158,7 +159,10 @@ async function runOnce({ stack, throttle, rep, browser }) {
 
   // Per-tab CDP throttle. Set after navigate so initial bundle parse is unthrottled
   // — we measure the steady-state, not first paint.
-  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' })
+  const url = RENDERER
+    ? `http://127.0.0.1:${PORT}/?renderer=${encodeURIComponent(RENDERER)}`
+    : `http://127.0.0.1:${PORT}/`
+  await page.goto(url, { waitUntil: 'load' })
 
   // PR 1 (and any branch with the workspace filter) defaults previously-unseen
   // workspaces to HIDDEN. Without this, the bench workspace is filtered out and
@@ -225,6 +229,7 @@ async function runOnce({ stack, throttle, rep, browser }) {
     throttle,
     simCount: SIM_COUNT,
     rep,
+    renderer: RENDERER ?? 'canvas2d',
     metrics: summary,
     cdp: {
       scriptDurationSec: cdpDelta('ScriptDuration'),
@@ -376,6 +381,7 @@ function parseCliArgs(argv) {
     else if (a === '--no-throttle') THROTTLES = [1]
     else if (a === '--throttle-only') THROTTLES = [4]
     else if (a === '--sim-count' && argv[i + 1]) { SIM_COUNT = parseInt(argv[++i], 10) }
+    else if (a === '--renderer' && argv[i + 1]) { RENDERER = argv[++i] }
   }
   return out
 }

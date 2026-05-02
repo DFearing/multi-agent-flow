@@ -24,7 +24,9 @@ import { Filter, GlProgram } from 'pixi.js'
 
 // ── Vertex shader ───────────────────────────────────────────────────────
 // Standard passthrough -- Filter provides the projection + position.
-const VERTEX = `
+// `#version 300 es` opts into ES 3.00 syntax (in/out, texture()) — without it
+// Pixi v8 falls back to ES 1.00 emulation and this shader fails to compile.
+const VERTEX = `#version 300 es
 in vec2 aPosition;
 out vec2 vTextureCoord;
 
@@ -53,7 +55,7 @@ void main(void)
 `
 
 // ── Fragment shader ─────────────────────────────────────────────────────
-const FRAGMENT = `
+const FRAGMENT = `#version 300 es
 in vec2 vTextureCoord;
 out vec4 finalColor;
 

@@ -42,7 +42,9 @@ vi.mock('pixi.js', () => {
 
   class MockTextureSource {
     _id: number
+    updateCount = 0
     constructor() { this._id = textureIdCounter++ }
+    update() { this.updateCount++ }
   }
 
   class MockTexture {
