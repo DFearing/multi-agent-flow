@@ -73,7 +73,11 @@ export function drawToolCalls(
       ctx.restore()
     }
 
-    const truncatedLabel = truncateText(ctx, toolLabel, cardW - 8)
+    // Reuse `label` from the card-sizing pass above. By construction the card
+    // is at least as wide as label needs (cardW = min(measured + 12, max), so
+    // cardW - 8 ≥ measured), which means `label` already fits within the
+    // narrower bound that we used to re-truncate to.
+    const truncatedLabel = label
 
     ctx.font = `${TOOL_DRAW.fontSize}px monospace`
     ctx.textAlign = 'center'

@@ -64,20 +64,21 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
       .alphaDecay(FORCE.alphaDecay)
       .velocityDecay(FORCE.velocityDecay)
       .on('tick', () => {
-        // Force tick only updates positions — write to frameRef, no React render
+        // Force tick only updates positions — write to frameRef, no React render.
+        // Lazy-clone agents: most ticks of a settled-ish layout produce zero
+        // drift > 0.1px, so the Map allocation only happens once we find a node
+        // that actually moved.
         const prev = frameRef.current
-        const newAgents = new Map(prev.agents)
-        let changed = false
+        let newAgents: Map<string, Agent> | null = null
         for (const node of sim.nodes()) {
-          const agent = newAgents.get(node.id)
-          if (agent && !agent.pinned && node.x !== undefined && node.y !== undefined) {
-            if (Math.abs(agent.x - node.x) > 0.1 || Math.abs(agent.y - node.y) > 0.1) {
-              newAgents.set(node.id, { ...agent, x: node.x, y: node.y })
-              changed = true
-            }
+          const agent = prev.agents.get(node.id)
+          if (!agent || agent.pinned || node.x === undefined || node.y === undefined) continue
+          if (Math.abs(agent.x - node.x) > 0.1 || Math.abs(agent.y - node.y) > 0.1) {
+            if (!newAgents) newAgents = new Map(prev.agents)
+            newAgents.set(node.id, { ...agent, x: node.x, y: node.y })
           }
         }
-        if (changed) {
+        if (newAgents) {
           frameRef.current = { ...prev, agents: newAgents }
         }
       })
@@ -285,8 +286,14 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
       syncForceSimulation(result.agents, result.edges)
     }
 
-    // Force tick — updates agent positions in frameRef
-    if (forceSimRef.current) forceSimRef.current.tick()
+    // Force tick — updates agent positions in frameRef. Skip when the
+    // simulation has settled (alpha < alphaMin); ticking past that point runs
+    // the full force computation for ~zero visible benefit. Drags re-wake the
+    // simulation via updateAgentPosition's alpha bump below.
+    {
+      const fs = forceSimRef.current
+      if (fs && fs.alpha() > fs.alphaMin()) fs.tick()
+    }
 
     // Throttle React re-renders — UI updates at ~4/sec, canvas stays smooth via frameRef
     if (newEvents.length > 0) {
@@ -382,6 +389,11 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     if (forceSimRef.current) {
       const node = forceSimRef.current.nodes().find(n => n.id === agentId)
       if (node) { node.fx = x; node.fy = y }
+      // Wake the simulation briefly so the next animate-loop tick propagates
+      // the new fx/fy through the link/collide forces. Without this, the
+      // alpha-gated tick stays asleep and connected agents don't follow.
+      const a = forceSimRef.current.alpha()
+      if (a < 0.05) forceSimRef.current.alpha(0.05)
     }
   }, [])
 
