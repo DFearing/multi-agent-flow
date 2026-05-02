@@ -17,6 +17,7 @@ vi.mock('pixi.js', () => {
     y = 0
     alpha = 1
     visible = true
+    eventMode = 'auto'
     addChild(child: unknown) { this.children.push(child) }
     removeChild(child: unknown) {
       const idx = this.children.indexOf(child)
@@ -190,6 +191,22 @@ describe('BubblesLayer', () => {
 
     // Both should be active and at different Y positions
     expect(layer.activeCount).toBe(2)
+  })
+
+  it('active bubble entries have eventMode=static and label=bubble-{agentId}', () => {
+    const layer = new BubblesLayer()
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1', [makeBubble(0)])],
+    ])
+
+    layer.update(agents, 2)
+
+    // Access active entries via the pool (container children of the root)
+    const bubbleContainers = (layer.container.children as Array<{ label: string; eventMode: string }>)
+      .filter(c => c.label.startsWith('bubble-'))
+    expect(bubbleContainers.length).toBeGreaterThan(0)
+    expect(bubbleContainers[0].eventMode).toBe('static')
+    expect(bubbleContainers[0].label).toBe('bubble-a1')
   })
 
   it('dispose cleans up all entries', () => {

@@ -231,6 +231,7 @@ export class AgentsLayer {
   private createEntry(agentId: string): AgentEntry {
     const container = new Container()
     container.label = `agent-${agentId}`
+    container.eventMode = 'static'
 
     // Body circle
     const body = new Sprite(this.bodyTexture)

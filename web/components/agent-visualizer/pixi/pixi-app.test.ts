@@ -99,9 +99,18 @@ vi.mock('pixi.js', () => {
     }
   }
 
+  class MockEventBoundary {
+    rootTarget: unknown
+    constructor(root: unknown) {
+      this.rootTarget = root
+    }
+    hitTest() { return null }
+  }
+
   return {
     Application: MockApplication,
     Container: MockContainer,
+    EventBoundary: MockEventBoundary,
     Texture: MockTexture,
     RenderTexture: MockRenderTexture,
     Rectangle: MockRectangle,
@@ -115,9 +124,12 @@ import {
   releaseSharedRenderer,
   registerViewport,
   deregisterViewport,
+  setViewportBoundaryRoot,
+  getViewportBoundary,
   getViewportCount,
   isSharedRendererActive,
 } from './pixi-app'
+import { Container } from 'pixi.js'
 
 // ─── Tests ───────────────────────────────────────────────────────────────
 
@@ -221,6 +233,40 @@ describe('Shared Pixi Renderer', () => {
     // New instance — not the same object
     expect(app2).not.toBe(app1)
     expect(appInstanceCount).toBe(2)
+
+    releaseSharedRenderer()
+  })
+
+  it('setViewportBoundaryRoot creates an EventBoundary on the viewport', async () => {
+    await acquireSharedRenderer()
+    const vp = registerViewport('vp-boundary')
+
+    // Initially no boundary
+    expect(vp.boundary).toBeNull()
+
+    // Set boundary root
+    const world = new Container()
+    setViewportBoundaryRoot('vp-boundary', world)
+
+    expect(vp.boundary).not.toBeNull()
+    expect((vp.boundary as unknown as { rootTarget: unknown }).rootTarget).toBe(world)
+
+    // getViewportBoundary accessor works
+    expect(getViewportBoundary('vp-boundary')).toBe(vp.boundary)
+
+    deregisterViewport('vp-boundary')
+    releaseSharedRenderer()
+  })
+
+  it('deregisterViewport nulls out the boundary', async () => {
+    await acquireSharedRenderer()
+    const vp = registerViewport('vp-null')
+    const world = new Container()
+    setViewportBoundaryRoot('vp-null', world)
+    expect(vp.boundary).not.toBeNull()
+
+    deregisterViewport('vp-null')
+    expect(vp.boundary).toBeNull()
 
     releaseSharedRenderer()
   })

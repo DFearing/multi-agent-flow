@@ -116,41 +116,98 @@ describe('createCanvas2DHitTestAdapter', () => {
 })
 
 describe('createPixiHitTestAdapter', () => {
+  function makeMockContainer(label: string, parent?: { label: string; parent?: unknown }) {
+    return { label, parent: parent ?? null }
+  }
+
+  function makeBoundaryRef(hitResult: unknown) {
+    return {
+      current: {
+        hitTest: vi.fn().mockReturnValue(hitResult),
+      },
+    }
+  }
+
   it('returns an object satisfying HitTestAdapter', () => {
     const ref = makeDrawPropsRef(new Map(), new Map(), [])
     const simTimeRef = { current: 0 }
-    const adapter = createPixiHitTestAdapter(ref, simTimeRef)
+    const boundaryRef = { current: null }
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
     assertHitTestInterface(adapter)
   })
 
-  it('findAgentAt hits an agent at its position', () => {
-    const agents = new Map<string, Agent>()
-    agents.set('a1', makeAgent('a1', 200, 200, false))
-    const ref = makeDrawPropsRef(agents, new Map(), [])
+  it('findAgentAt returns agent id when hit lands on agent container', () => {
+    const ref = makeDrawPropsRef(new Map(), new Map(), [])
     const simTimeRef = { current: 0 }
-    const adapter = createPixiHitTestAdapter(ref, simTimeRef)
+    const container = makeMockContainer('agent-abc')
+    const boundaryRef = makeBoundaryRef(container)
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
 
-    // Hit inside the sub-agent radius
-    expect(adapter.findAgentAt(200, 200)).toBe('a1')
-    // Miss far away
-    expect(adapter.findAgentAt(999, 999)).toBeNull()
+    expect(adapter.findAgentAt(100, 100)).toBe('abc')
   })
 
-  it('reads from ref.current at call time, not creation time', () => {
-    const agents1 = new Map<string, Agent>()
-    const ref = makeDrawPropsRef(agents1, new Map(), [])
+  it('findToolCallAt returns tool id when hit lands on tool container', () => {
+    const ref = makeDrawPropsRef(new Map(), new Map(), [])
     const simTimeRef = { current: 0 }
-    const adapter = createPixiHitTestAdapter(ref, simTimeRef)
+    const container = makeMockContainer('tool-xyz')
+    const boundaryRef = makeBoundaryRef(container)
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
 
-    // Initially no agents
+    expect(adapter.findToolCallAt(50, 50)).toBe('xyz')
+  })
+
+  it('findDiscoveryAt returns discovery id when hit lands on discovery container', () => {
+    const ref = makeDrawPropsRef(new Map(), new Map(), [])
+    const simTimeRef = { current: 0 }
+    const container = makeMockContainer('discovery-d1')
+    const boundaryRef = makeBoundaryRef(container)
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
+
+    expect(adapter.findDiscoveryAt(30, 30)).toBe('d1')
+  })
+
+  it('findBubbleAgentAt returns agent id from bubble label', () => {
+    const ref = makeDrawPropsRef(new Map(), new Map(), [])
+    const simTimeRef = { current: 0 }
+    const container = makeMockContainer('bubble-agent1')
+    const boundaryRef = makeBoundaryRef(container)
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
+
+    expect(adapter.findBubbleAgentAt(10, 10)).toBe('agent1')
+  })
+
+  it('walk-up: hit on child finds labeled parent', () => {
+    const ref = makeDrawPropsRef(new Map(), new Map(), [])
+    const simTimeRef = { current: 0 }
+    const parent = makeMockContainer('agent-walk')
+    const child = makeMockContainer('body', parent)
+    const boundaryRef = makeBoundaryRef(child)
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
+
+    expect(adapter.findAgentAt(100, 100)).toBe('walk')
+  })
+
+  it('returns null when hit returns null', () => {
+    const ref = makeDrawPropsRef(new Map(), new Map(), [])
+    const simTimeRef = { current: 0 }
+    const boundaryRef = makeBoundaryRef(null)
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
+
     expect(adapter.findAgentAt(100, 100)).toBeNull()
+    expect(adapter.findToolCallAt(100, 100)).toBeNull()
+    expect(adapter.findBubbleAgentAt(100, 100)).toBeNull()
+    expect(adapter.findDiscoveryAt(100, 100)).toBeNull()
+  })
 
-    // Add an agent after adapter creation
-    const agents2 = new Map<string, Agent>()
-    agents2.set('a2', makeAgent('a2', 100, 100, true))
-    ref.current.agents = agents2
+  it('returns null when boundaryRef.current is null', () => {
+    const ref = makeDrawPropsRef(new Map(), new Map(), [])
+    const simTimeRef = { current: 0 }
+    const boundaryRef = { current: null }
+    const adapter = createPixiHitTestAdapter(ref, simTimeRef, boundaryRef as never)
 
-    // Adapter should pick up the new data
-    expect(adapter.findAgentAt(100, 100)).toBe('a2')
+    expect(adapter.findAgentAt(100, 100)).toBeNull()
+    expect(adapter.findToolCallAt(100, 100)).toBeNull()
+    expect(adapter.findBubbleAgentAt(100, 100)).toBeNull()
+    expect(adapter.findDiscoveryAt(100, 100)).toBeNull()
   })
 })

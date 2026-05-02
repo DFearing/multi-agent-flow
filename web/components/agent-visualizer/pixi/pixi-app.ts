@@ -17,7 +17,7 @@
  * calls sharedRenderer.renderViewport() for its viewport id.
  */
 
-import { Application, Container, RenderTexture, Texture } from 'pixi.js'
+import { Application, Container, EventBoundary, RenderTexture, Texture } from 'pixi.js'
 
 // ─── Viewport registry ─────────────────────────────────────────────────────
 
@@ -36,6 +36,8 @@ export interface Viewport {
   /** Current viewport dimensions in CSS pixels. */
   width: number
   height: number
+  /** EventBoundary for per-pixel hit-testing against this viewport's world container. */
+  boundary: EventBoundary | null
 }
 
 /** Singleton state for the shared renderer. */
@@ -144,9 +146,30 @@ export function registerViewport(id: string): Viewport {
     ctx: null,
     width: 0,
     height: 0,
+    boundary: null,
   }
   shared.viewports.set(id, viewport)
   return viewport
+}
+
+/**
+ * Set the EventBoundary root for a viewport. Call after building the world
+ * container so hit-tests route through the correct scene-graph subtree.
+ */
+export function setViewportBoundaryRoot(id: string, root: Container): void {
+  if (!shared) return
+  const vp = shared.viewports.get(id)
+  if (!vp) return
+  vp.boundary = new EventBoundary(root)
+}
+
+/**
+ * Retrieve the EventBoundary for a viewport (for external hit-testing).
+ */
+export function getViewportBoundary(id: string): EventBoundary | null {
+  if (!shared) return null
+  const vp = shared.viewports.get(id)
+  return vp?.boundary ?? null
 }
 
 /**
@@ -161,6 +184,7 @@ export function deregisterViewport(id: string): void {
     vp.renderTexture.destroy(true)
     vp.renderTexture = null
   }
+  vp.boundary = null
   vp.stage.destroy({ children: true })
   shared.viewports.delete(id)
 }
