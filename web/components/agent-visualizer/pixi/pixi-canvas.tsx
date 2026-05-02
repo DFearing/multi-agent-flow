@@ -44,6 +44,14 @@ import { ParticlesLayer } from './particles-layer'
 import { PixiBloomFilter } from './bloom-filter'
 import { applyCameraTransform } from './camera'
 import { useSimulationManager } from '../simulation-manager-provider'
+import type { EffectToggles } from '@/hooks/use-perf-settings'
+
+const DEFAULT_EFFECTS: EffectToggles = {
+  bloom: true,
+  particles: true,
+  bubbles: true,
+  backgroundParticles: true,
+}
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -69,6 +77,9 @@ interface CanvasProps {
    *  off-screen. The simulation sub-state keeps ticking so stats panels
    *  still receive fresh data. */
   pauseWhenOffscreen?: boolean
+  /** Per-effect toggles. Disabled effects skip their per-frame update and
+   *  hide their display objects so the GPU can cull the empty subtree. */
+  effects?: EffectToggles
 }
 
 export function PixiCanvas({
@@ -91,6 +102,7 @@ export function PixiCanvas({
   showCostOverlay,
   minZoomLevel,
   pauseWhenOffscreen = true,
+  effects = DEFAULT_EFFECTS,
 }: CanvasProps) {
   const manager = useSimulationManager()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -108,6 +120,8 @@ export function PixiCanvas({
   const boundaryRef = useRef<EventBoundary | null>(null)
   /** Set to true once boot() completes and layers are ready. */
   const readyRef = useRef(false)
+  /** Mirror of readyRef for effect dependencies — refs aren't reactive. */
+  const [booted, setBooted] = useState(false)
   const timeRef = useRef(0)
   const lastFrameRef = useRef(0)
 
@@ -261,6 +275,8 @@ export function PixiCanvas({
       dt,
       timeRef.current,
       showHexGrid,
+      undefined,
+      effects.backgroundParticles,
     )
 
     edgesLayerRef.current?.update(
@@ -291,15 +307,27 @@ export function PixiCanvas({
       timeRef.current,
     )
 
-    bubblesLayerRef.current?.update(s.agents, timeRef.current)
+    // Disabled-effect layers skip their update entirely and hide their
+    // container — saves both the JS update cost and the GPU draw call.
+    if (bubblesLayerRef.current) {
+      bubblesLayerRef.current.container.visible = effects.bubbles
+      if (effects.bubbles) {
+        bubblesLayerRef.current.update(s.agents, timeRef.current)
+      }
+    }
 
-    particlesLayerRef.current?.update(
-      s.particles,
-      s.edges,
-      s.agents,
-      s.toolCalls,
-      timeRef.current,
-    )
+    if (particlesLayerRef.current) {
+      particlesLayerRef.current.container.visible = effects.particles
+      if (effects.particles) {
+        particlesLayerRef.current.update(
+          s.particles,
+          s.edges,
+          s.agents,
+          s.toolCalls,
+          timeRef.current,
+        )
+      }
+    }
 
     // Render this viewport via the shared renderer and blit to the visible canvas
     renderViewport(viewportId)
@@ -378,13 +406,14 @@ export function PixiCanvas({
       particlesLayerRef.current = new ParticlesLayer()
       world.addChild(particlesLayerRef.current.container)
 
-      // Bloom filter — per-viewport post-processing
+      // Bloom filter — per-viewport post-processing. Attached on demand by
+      // the bloom-toggle effect below; we only construct it here.
       const bloomFilter = new PixiBloomFilter(0.6)
-      viewport.stage.filters = [bloomFilter.filter]
       bloomFilterRef.current = bloomFilter
 
       // Signal that the draw callback can start rendering.
       readyRef.current = true
+      setBooted(true)
     }
 
     boot()
@@ -392,6 +421,7 @@ export function PixiCanvas({
     return () => {
       destroyed = true
       readyRef.current = false
+      setBooted(false)
 
       // Dispose layers (before deregisterViewport destroys the stage)
       if (backgroundLayerRef.current) {
@@ -438,6 +468,18 @@ export function PixiCanvas({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once
   }, [viewportId])
+
+  // ─── Bloom on/off ───────────────────────────────────────────────────────
+  // Attach or detach the bloom post-processing filter as the user toggles
+  // it. Skipping the filter entirely (vs. setting intensity to 0) avoids
+  // the off-screen render-target pass.
+  useEffect(() => {
+    if (!booted) return
+    const viewport = viewportRef.current
+    const bloom = bloomFilterRef.current
+    if (!viewport || !bloom) return
+    viewport.stage.filters = effects.bloom ? [bloom.filter] : []
+  }, [booted, effects.bloom])
 
   return (
     <div

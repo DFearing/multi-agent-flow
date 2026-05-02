@@ -11,6 +11,7 @@ import { FPSIndicator } from "./fps-indicator"
 import { usePanelLayout } from "@/hooks/use-panel-layout"
 import type { WorkspaceFilterAPI } from "@/hooks/use-workspace-filter"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
+import { FRAME_CAP_OPTIONS, EFFECT_LABELS, type EffectToggles } from "@/hooks/use-perf-settings"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
 
@@ -135,6 +136,11 @@ export interface TopBarProps {
   showMessageFeed: boolean
   isMuted: boolean
   workspaceFilter: WorkspaceFilterAPI
+  // Performance settings (frame cap + per-effect toggles)
+  frameCap: number
+  onFrameCapChange: (fps: number) => void
+  effects: EffectToggles
+  onEffectChange: (key: keyof EffectToggles, value: boolean) => void
   /** Session ids whose canvas the user has ✕-closed. The top bar renders a
    *  chip per id so they can be reopened via onShowCanvas. */
   hiddenCanvases?: ReadonlySet<string>
@@ -155,6 +161,7 @@ export const TopBar = memo(function TopBar({
   workspaceFilter,
   hiddenCanvases, onShowCanvas,
   onTogglePanel, onToggleTimeline, onToggleMute, onUiClick,
+  frameCap, onFrameCapChange, effects, onEffectChange,
 }: TopBarProps) {
   const { resetLayout, saveLayout, hardResetLayout, tilePanels, instanceId, hostId, otherInstances } = usePanelLayout()
   const resetClickRef = useRef(0)
@@ -231,6 +238,12 @@ export const TopBar = memo(function TopBar({
 
         {/* Right-side info/controls */}
         <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
+          <PerfButton
+            frameCap={frameCap}
+            onFrameCapChange={onFrameCapChange}
+            effects={effects}
+            onEffectChange={onEffectChange}
+          />
           {isVSCode && <ConnectionIndicator status={connectionStatus} />}
 
           {/* Panel toggle group — kept tightly spaced via inner gap-1, but each
@@ -293,6 +306,133 @@ export const TopBar = memo(function TopBar({
     </FloatingPanel>
   )
 })
+
+// ─── Performance settings button + popover ─────────────────────────────────
+// Frame-rate cap (Off/120/60/30/15) and per-effect toggles. Lowering the cap
+// reduces GPU/CPU load and battery drain without making individual frames
+// faster; turning effects off cuts per-frame work.
+
+function PerfButton({
+  frameCap,
+  onFrameCapChange,
+  effects,
+  onEffectChange,
+}: {
+  frameCap: number
+  onFrameCapChange: (fps: number) => void
+  effects: EffectToggles
+  onEffectChange: (key: keyof EffectToggles, value: boolean) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const buttonRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [anchorRect, setAnchorRect] = useState<{ top: number; right: number } | null>(null)
+
+  useEffect(() => {
+    if (!open) { setAnchorRect(null); return }
+    const update = () => {
+      const r = buttonRef.current?.getBoundingClientRect()
+      if (r) setAnchorRect({ top: r.bottom + 6, right: window.innerWidth - r.right })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (buttonRef.current?.contains(target)) return
+      if (popoverRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    window.addEventListener('mousedown', handler)
+    return () => window.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const offCount = Object.values(effects).filter(v => !v).length
+  const capLabel = FRAME_CAP_OPTIONS.find(o => o.value === frameCap)?.label ?? 'Uncapped'
+  const summary = offCount > 0
+    ? `Perf · ${capLabel} · ${offCount} off`
+    : `Perf · ${capLabel}`
+
+  const popoverContent = (
+    <div
+      ref={popoverRef}
+      style={{
+        position: 'fixed',
+        top: anchorRect?.top ?? 0,
+        right: anchorRect?.right ?? 0,
+        minWidth: 260,
+        padding: 10,
+        background: COLORS.panelBg,
+        border: `1px solid ${COLORS.glassBorder}`,
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+        zIndex: 99999,
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+      }}
+    >
+      <div className="text-[10px] font-mono mb-2" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
+        FRAME CAP
+      </div>
+      <select
+        value={frameCap}
+        onChange={(e) => onFrameCapChange(Number(e.target.value))}
+        className="w-full font-mono text-[11px] px-2 py-1 rounded mb-3"
+        style={{
+          background: COLORS.toggleInactive,
+          border: `1px solid ${COLORS.toggleBorder}`,
+          color: COLORS.textPrimary,
+          cursor: 'pointer',
+        }}
+      >
+        {FRAME_CAP_OPTIONS.map(opt => (
+          <option key={opt.value} value={opt.value}>{opt.label}</option>
+        ))}
+      </select>
+
+      <div className="text-[10px] font-mono mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
+        EFFECTS
+      </div>
+      {(Object.keys(EFFECT_LABELS) as Array<keyof EffectToggles>).map(key => (
+        <label
+          key={key}
+          className="flex items-center gap-2 py-1 px-1 rounded cursor-pointer"
+          style={{ color: effects[key] ? COLORS.textPrimary : COLORS.textMuted }}
+        >
+          <input
+            type="checkbox"
+            checked={effects[key]}
+            onChange={(e) => onEffectChange(key, e.target.checked)}
+            style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
+          />
+          <span className="text-[10px] font-mono">{EFFECT_LABELS[key]}</span>
+        </label>
+      ))}
+      <div className="text-[9px] font-mono mt-2 pt-2" style={{ color: COLORS.textMuted, borderTop: `1px solid ${COLORS.holoBorder06}` }}>
+        Lower cap saves power; turning effects off cuts per-frame work.
+      </div>
+    </div>
+  )
+
+  return (
+    <>
+      <div ref={buttonRef} style={{ display: 'inline-flex' }}>
+        <ToggleButton active={frameCap > 0 || offCount > 0} onClick={() => setOpen(o => !o)}>
+          {summary}
+        </ToggleButton>
+      </div>
+      {open && anchorRect && typeof document !== 'undefined' && createPortal(popoverContent, document.body)}
+    </>
+  )
+}
 
 // ─── Workspace filter button + popover ──────────────────────────────────────
 

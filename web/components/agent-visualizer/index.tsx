@@ -31,6 +31,7 @@ import { mergeByTimestamp } from "@/lib/sort-utils"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
+import { usePerfSettings } from "@/hooks/use-perf-settings"
 import { PanelLayoutProvider } from "./panel-layout-provider"
 import { usePanelLayout } from "@/hooks/use-panel-layout"
 
@@ -171,6 +172,14 @@ function AgentVisualizerInner() {
 
   const [isReviewing, setIsReviewing] = useState(false)
   const { isMuted, handleToggleMute, playUiClick } = useAudioEffects(agents, toolCalls, isReviewing)
+
+  // Performance settings: persisted frame-rate cap + per-effect toggles.
+  // The cap is pushed into the shared SimulationManager so the rAF loop
+  // throttles itself; effect toggles flow as props down to PixiCanvas.
+  const { frameCap, setFrameCap, effects, setEffect } = usePerfSettings()
+  useEffect(() => {
+    manager.setFrameCap(frameCap)
+  }, [manager, frameCap])
 
   // Auto-play on mount
   useEffect(() => {
@@ -401,6 +410,7 @@ function AgentVisualizerInner() {
             showStats={showStats}
             showHexGrid={showHexGrid}
             showCostOverlay={showCostOverlay}
+            effects={effects}
             zoomToFitTrigger={zoomToFitTrigger}
             pauseAutoFit={selection.contextMenu !== null}
             getSessionEventLog={bridge.getSessionEventLog}
@@ -530,6 +540,10 @@ function AgentVisualizerInner() {
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}
         onUiClick={playUiClick}
+        frameCap={frameCap}
+        onFrameCapChange={setFrameCap}
+        effects={effects}
+        onEffectChange={setEffect}
       />
     </div>
     </OpenFileProvider>
