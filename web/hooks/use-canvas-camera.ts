@@ -11,8 +11,19 @@ export interface Transform {
   scale: number
 }
 
+/**
+ * useCanvasCamera — manages camera transform (pan, zoom, auto-fit) for a
+ * canvas-like container element.
+ *
+ * The `mainCanvasRef` element is used only for:
+ *   - `getBoundingClientRect()` — to convert screen coordinates to canvas-local
+ *     coordinates in `screenToCanvas`.
+ *
+ * Any HTMLElement (div, canvas, etc.) satisfies this contract.
+ */
+
 interface CameraOptions {
-  mainCanvasRef: MutableRefObject<HTMLCanvasElement | null>
+  mainCanvasRef: MutableRefObject<HTMLElement | null>
   drawPropsRef: MutableRefObject<{
     agents: Map<string, Agent>
     toolCalls: Map<string, ToolCallNode>

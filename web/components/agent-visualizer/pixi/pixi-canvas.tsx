@@ -140,29 +140,19 @@ export function PixiCanvas({
     return () => observer.disconnect()
   }, [pauseWhenOffscreen])
 
-  // ─── Canvas ref for camera/interaction hooks ────────────────────────────
-  // useCanvasCamera and useCanvasInteraction expect a ref to an element for
-  // bounding rect calculations and native wheel listener attachment. In the
-  // Canvas2D path this is the <canvas> element; in the Pixi path the canvas
-  // is created asynchronously by Pixi. We point mainCanvasRef at the
-  // container div instead — it has the same bounding rect (Pixi's canvas
-  // fills it via `resizeTo`), and it's available synchronously at mount so
-  // useCanvasInteraction's wheel useEffect can attach immediately.
-  //
-  // The cast to HTMLCanvasElement is safe because the hooks only use
-  // getBoundingClientRect() and addEventListener('wheel', ...), both of
-  // which are on HTMLElement. If a future hook calls canvas-specific APIs
-  // (getContext, toDataURL, etc.), this will need to change.
-  const mainCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  // ─── Element ref for camera/interaction hooks ───────────────────────────
+  // useCanvasCamera and useCanvasInteraction accept RefObject<HTMLElement>.
+  // In the Pixi path the canvas is created asynchronously by Pixi, so we
+  // point mainCanvasRef at the container div instead — it has the same
+  // bounding rect (Pixi's canvas fills it via `resizeTo`), and it's
+  // available synchronously at mount so useCanvasInteraction's wheel
+  // useEffect can attach immediately.
+  const mainCanvasRef = useRef<HTMLElement | null>(null)
 
-  // Populate mainCanvasRef from the container div on mount. The cast is safe
-  // because the hooks only use getBoundingClientRect() and addEventListener(),
-  // both inherited from HTMLElement. This effect runs before the hooks' effects
-  // (React fires effects in registration order), so the wheel handler in
-  // useCanvasInteraction will find the element on its first (and only) run.
+  // Populate mainCanvasRef from the container div on mount.
   useEffect(() => {
     if (containerRef.current) {
-      mainCanvasRef.current = containerRef.current as unknown as HTMLCanvasElement
+      mainCanvasRef.current = containerRef.current
     }
   }, [])
 

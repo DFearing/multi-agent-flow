@@ -22,6 +22,19 @@ interface InteractionCallbacks {
   onAgentDoubleClick?: (agentId: string, localX: number, localY: number) => void
 }
 
+/**
+ * useCanvasInteraction — handles pointer events (click, drag, hover, wheel,
+ * double-click, context-menu) for a canvas-like container element.
+ *
+ * The `mainCanvasRef` element is used only for:
+ *   - `getBoundingClientRect()` — to compute local coordinates for zoom and
+ *     double-click hit-detection.
+ *   - `addEventListener('wheel', ...)` / `removeEventListener('wheel', ...)` —
+ *     to attach a non-passive wheel listener for pinch-zoom.
+ *
+ * Any HTMLElement (div, canvas, etc.) satisfies this contract.
+ */
+
 interface InteractionOptions {
   drawPropsRef: MutableRefObject<{
     agents: Map<string, Agent>
@@ -34,7 +47,7 @@ interface InteractionOptions {
   simTimeRef: MutableRefObject<number>
   screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number }
   doZoomToFit: () => void
-  mainCanvasRef: MutableRefObject<HTMLCanvasElement | null>
+  mainCanvasRef: MutableRefObject<HTMLElement | null>
 }
 
 export function useCanvasInteraction({
