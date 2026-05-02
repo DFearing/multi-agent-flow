@@ -6,7 +6,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     // ring-buffer.test.ts uses node:test (pure data-structure test, no DOM
-     //  needed) — leave it to `pnpm --filter root test` and skip in vitest.
+    //  needed) — leave it to `pnpm --filter root test` and skip in vitest.
     exclude: ['__tests__/**', 'node_modules/**', 'lib/ring-buffer.test.ts'],
   },
   resolve: {
