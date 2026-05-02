@@ -61,8 +61,10 @@ vi.mock('pixi.js', () => {
     visible = true
     _cleared = false
     _lastCircleR = 0
+    _lastPolyPoints: number[] = []
     clear() { this._cleared = true; return this }
     circle(_x: number, _y: number, r: number) { this._lastCircleR = r; return this }
+    poly(points: number[]) { this._lastPolyPoints = points; return this }
     stroke(_opts: unknown) { return this }
     fill(_opts: unknown) { return this }
     destroy() { /* no-op */ }
@@ -77,10 +79,19 @@ vi.mock('pixi.js', () => {
   }
 })
 
-// ─── Mock pixi-app (getCircleTexture) ────────────────────────────────────
+// ─── Mock pixi-app (texture + geometry helpers) ──────────────────────────
 
 vi.mock('./pixi-app', () => ({
   getCircleTexture: () => ({ destroy: () => {} }),
+  getHexagonTexture: () => ({ destroy: () => {} }),
+  hexagonPoints: (radius: number) => {
+    const pts: number[] = []
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 2
+      pts.push(radius * Math.cos(angle), radius * Math.sin(angle))
+    }
+    return pts
+  },
 }))
 
 // ─── Mock GlyphAtlas ─────────────────────────────────────────────────────

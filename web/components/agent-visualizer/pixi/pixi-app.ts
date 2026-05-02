@@ -308,6 +308,60 @@ export function getCircleTexture(radius: number): Texture {
 }
 
 /**
+ * Generate a regular hexagon texture, top-pointing (matches Canvas2D
+ * drawHexagon). Used as the agent body sprite — same tint-and-scale
+ * pattern as getCircleTexture, just six-sided.
+ */
+const hexagonTextureCache = new Map<string, Texture>()
+
+export function getHexagonTexture(radius: number): Texture {
+  const rQ = Math.ceil(radius)
+  const key = `hex|${rQ}`
+  const cached = hexagonTextureCache.get(key)
+  if (cached) return cached
+
+  // Pad by 1 px so anti-aliased edges aren't clipped to the canvas border.
+  const pad = 1
+  const size = rQ * 2 + pad * 2
+  const cx = size / 2
+  const cy = size / 2
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('getHexagonTexture: 2D context unavailable')
+
+  ctx.beginPath()
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 2
+    const px = cx + rQ * Math.cos(angle)
+    const py = cy + rQ * Math.sin(angle)
+    if (i === 0) ctx.moveTo(px, py)
+    else ctx.lineTo(px, py)
+  }
+  ctx.closePath()
+  ctx.fillStyle = '#ffffff'
+  ctx.fill()
+
+  const texture = Texture.from(canvas)
+  hexagonTextureCache.set(key, texture)
+  return texture
+}
+
+/**
+ * Build a hexagon point array for use with Pixi Graphics .poly() — top-pointing,
+ * six vertices, centered on (0, 0). Same shape Canvas2D drawHexagon produces.
+ */
+export function hexagonPoints(radius: number): number[] {
+  const points: number[] = []
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 2
+    points.push(radius * Math.cos(angle), radius * Math.sin(angle))
+  }
+  return points
+}
+
+/**
  * Dispose of all cached textures. Call when the entire Pixi renderer is
  * torn down to free GPU memory.
  */
@@ -316,4 +370,6 @@ export function disposeTextureCache(): void {
   glowTextureCache.clear()
   for (const t of circleTextureCache.values()) t.destroy(true)
   circleTextureCache.clear()
+  for (const t of hexagonTextureCache.values()) t.destroy(true)
+  hexagonTextureCache.clear()
 }

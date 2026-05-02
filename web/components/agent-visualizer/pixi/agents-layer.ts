@@ -22,7 +22,7 @@ import type { Agent } from '@/lib/agent-types'
 import { NODE, ANIM } from '@/lib/agent-types'
 import { AGENT_DRAW, STATS_OVERLAY } from '@/lib/canvas-constants'
 import { getStateColor } from '@/lib/colors'
-import { getCircleTexture } from './pixi-app'
+import { getHexagonTexture, hexagonPoints } from './pixi-app'
 import { GlyphAtlas } from './glyph-atlas'
 
 /** Persistent state for one agent's display objects. */
@@ -68,7 +68,9 @@ export class AgentsLayer {
   readonly container: Container
   private entries = new Map<string, AgentEntry>()
   private readonly glyphAtlas: GlyphAtlas
-  private readonly bodyTexture = getCircleTexture(16)
+  /** Body texture is a 16-radius hexagon (matches Canvas2D drawHexagon).
+   *  Per-agent radius is applied via sprite scale. */
+  private readonly bodyTexture = getHexagonTexture(16)
 
   constructor() {
     this.container = new Container()
@@ -122,33 +124,35 @@ export class AgentsLayer {
       entry.container.visible = agent.opacity > 0.01
 
       // ── Body ────────────────────────────────────────────────────────
-      const bodyScale = radius / 16 // texture radius is 16
+      // Canvas2D draws the body hex at r*0.9 (drawHexagon at draw-agents.ts:183).
+      // bodyTexture is a 16-radius hex; apply (radius*0.9)/16 scale.
+      const bodyScale = (radius * 0.9) / 16
       entry.body.scale.set(bodyScale)
       entry.body.tint = tint
 
-      // ── Selection ring ──────────────────────────────────────────────
+      // ── Selection ring (hexagonal) ──────────────────────────────────
       entry.selectionRing.visible = isSelected
       if (isSelected) {
         entry.selectionRing.clear()
-        entry.selectionRing.circle(0, 0, radius + 4)
+        entry.selectionRing.poly(hexagonPoints(radius + 4))
         entry.selectionRing.stroke({ width: 2.5, color: tint, alpha: 0.8 })
       }
 
-      // ── Hover halo ─────────────────────────────────────────────────
+      // ── Hover halo (hexagonal) ──────────────────────────────────────
       entry.hoverHalo.visible = isHovered
       if (isHovered) {
         entry.hoverHalo.clear()
-        entry.hoverHalo.circle(0, 0, radius + AGENT_DRAW.glowPadding)
+        entry.hoverHalo.poly(hexagonPoints(radius + AGENT_DRAW.glowPadding))
         entry.hoverHalo.fill({ color: tint, alpha: 0.15 })
       }
 
-      // ── Pulse ring (thinking state) ────────────────────────────────
+      // ── Pulse ring (thinking state, hexagonal) ──────────────────────
       entry.pulseRing.visible = agent.state === 'thinking'
       if (agent.state === 'thinking') {
         const pulseAlpha = 0.15 + Math.sin(time * ANIM.pulseSpeed) * 0.1
         const pulseRadius = radius + AGENT_DRAW.orbitParticleOffset
         entry.pulseRing.clear()
-        entry.pulseRing.circle(0, 0, pulseRadius)
+        entry.pulseRing.poly(hexagonPoints(pulseRadius))
         entry.pulseRing.stroke({ width: 1.5, color: tint, alpha: pulseAlpha })
       }
 
