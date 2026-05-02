@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useAgentSimulation } from '@/hooks/use-agent-simulation'
+import { useSessionSimulation } from '@/hooks/use-session-simulation'
+import { useSimulationManager } from './simulation-manager-provider'
 import { useFrameRefSelector } from '@/hooks/use-frame-ref-selector'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { usePanelLayout } from '@/hooks/use-panel-layout'
@@ -52,7 +53,6 @@ interface SessionCanvasPanelProps {
   getSessionEventLog: (sessionId: string) => readonly SimulationEvent[]
   onAgentClick: (agentId: string | null, sessionId: string) => void
   onAgentHover: (agentId: string | null) => void
-  onAgentDrag: (agentId: string, x: number, y: number) => void
   onContextMenu: (e: React.MouseEvent, type: 'agent' | 'edge' | 'canvas', id?: string) => void
   onToolCallClick?: (toolCallId: string | null) => void
   onDiscoveryClick?: (discoveryId: string | null) => void
@@ -67,11 +67,12 @@ export function SessionCanvasPanel({
   showStats, showHexGrid, showCostOverlay,
   zoomToFitTrigger, pauseAutoFit,
   getSessionEventLog,
-  onAgentClick, onAgentHover, onAgentDrag,
+  onAgentClick, onAgentHover,
   onContextMenu, onToolCallClick, onDiscoveryClick,
   onClose,
 }: SessionCanvasPanelProps) {
   const panelId = `canvas-slot-${slot}` as const
+  const manager = useSimulationManager()
   const consumedRef = useRef(0)
   const log = getSessionEventLog(sessionId)
   const sliceEnd = log.length
@@ -79,11 +80,9 @@ export function SessionCanvasPanel({
     ? (log.slice(consumedRef.current, sliceEnd) as SimulationEvent[])
     : EMPTY_EVENTS
 
-  const sim = useAgentSimulation({
-    useMockData: false,
+  const sim = useSessionSimulation(manager, sessionId, {
     externalEvents: newEvents,
     onExternalEventsConsumed: () => { consumedRef.current = sliceEnd },
-    sessionFilter: sessionId,
   })
 
   useEffect(() => {
@@ -280,7 +279,7 @@ export function SessionCanvasPanel({
               pauseAutoFit={pauseAutoFit}
               onAgentClick={(id) => onAgentClick(id, sessionId)}
               onAgentHover={onAgentHover}
-              onAgentDrag={onAgentDrag}
+              onAgentDrag={sim.updateAgentPosition}
               onContextMenu={onContextMenu}
               onToolCallClick={onToolCallClick}
               selectedToolCallId={selectedToolCallId}
@@ -301,7 +300,7 @@ export function SessionCanvasPanel({
               pauseAutoFit={pauseAutoFit}
               onAgentClick={(id) => onAgentClick(id, sessionId)}
               onAgentHover={onAgentHover}
-              onAgentDrag={onAgentDrag}
+              onAgentDrag={sim.updateAgentPosition}
               onContextMenu={onContextMenu}
               onToolCallClick={onToolCallClick}
               selectedToolCallId={selectedToolCallId}
