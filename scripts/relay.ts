@@ -79,6 +79,71 @@ function broadcast(data: string) {
 
 const eventBuffer = new Map<string, AgentEvent[]>()
 
+/** Per-agent lifecycle events preserved outside the 5000-event buffer cap so a
+ *  late-connecting client can still reconstruct the agent window even when the
+ *  original spawn has aged out. The buffer evicts oldest-first and overflows on
+ *  long sessions; these snapshots survive so every known agent has at minimum
+ *  its spawn (plus latest model + context + completion) replayed on reconnect. */
+interface AgentSnapshot {
+  spawn: AgentEvent
+  model?: AgentEvent
+  context?: AgentEvent
+  complete?: AgentEvent
+}
+const agentSnapshots = new Map<string, Map<string, AgentSnapshot>>()
+
+function getAgentSnapshots(sessionId: string): Map<string, AgentSnapshot> {
+  let m = agentSnapshots.get(sessionId)
+  if (!m) { m = new Map(); agentSnapshots.set(sessionId, m) }
+  return m
+}
+
+function updateAgentSnapshot(event: AgentEvent): void {
+  if (!event.sessionId) return
+  const payload = event.payload as Record<string, unknown> | undefined
+  if (event.type === 'agent_spawn') {
+    const name = typeof payload?.name === 'string' ? payload.name : null
+    if (!name) return
+    const bySession = getAgentSnapshots(event.sessionId)
+    const existing = bySession.get(name)
+    // Resume after inactivity re-emits agent_spawn; preserve the original spawn
+    // (and its time=0 spawnTime) but clear completion so the agent shows active.
+    if (existing) {
+      bySession.set(name, { ...existing, complete: undefined })
+    } else {
+      bySession.set(name, { spawn: event })
+    }
+  } else if (event.type === 'agent_complete') {
+    const name = typeof payload?.name === 'string' ? payload.name : null
+    if (!name) return
+    const snap = agentSnapshots.get(event.sessionId)?.get(name)
+    if (snap) snap.complete = event
+  } else if (event.type === 'model_detected') {
+    const agent = typeof payload?.agent === 'string' ? payload.agent : null
+    if (!agent) return
+    const snap = agentSnapshots.get(event.sessionId)?.get(agent)
+    if (snap) snap.model = event
+  } else if (event.type === 'context_update') {
+    const agent = typeof payload?.agent === 'string' ? payload.agent : null
+    if (!agent) return
+    const snap = agentSnapshots.get(event.sessionId)?.get(agent)
+    if (snap) snap.context = event
+  }
+}
+
+function snapshotEventsForSession(sessionId: string): AgentEvent[] {
+  const bySession = agentSnapshots.get(sessionId)
+  if (!bySession) return []
+  const out: AgentEvent[] = []
+  for (const snap of bySession.values()) {
+    out.push(snap.spawn)
+    if (snap.model) out.push(snap.model)
+    if (snap.context) out.push(snap.context)
+    if (snap.complete) out.push(snap.complete)
+  }
+  return out
+}
+
 function broadcastEvent(event: AgentEvent) {
   sessionEventCount++
   if (event.type === 'model_detected') {
@@ -95,6 +160,7 @@ function broadcastEvent(event: AgentEvent) {
       buf = buf.slice(buf.length - MAX_EVENT_BUFFER)
     }
     eventBuffer.set(event.sessionId, buf)
+    updateAgentSnapshot(event)
   }
 
   broadcast(JSON.stringify({ type: 'agent-event', event }))
@@ -515,6 +581,15 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         const buffered = eventBuffer.get(s.id)
         if (buffered && buffered.length > 0) {
           sendSSE(res, { type: 'agent-event-batch', events: buffered })
+        }
+        // Replay preserved per-agent lifecycle events last so any agent whose
+        // spawn aged out of the 5000-cap buffer still materializes. Handlers
+        // are idempotent (handleAgentSpawn reactivates if existing) and the
+        // snapshot is always at least as fresh as the buffer, so a duplicate
+        // context_update here just confirms the latest tokens reading.
+        const snapshot = snapshotEventsForSession(s.id)
+        if (snapshot.length > 0) {
+          sendSSE(res, { type: 'agent-event-batch', events: snapshot })
         }
       }
     },
