@@ -88,6 +88,18 @@ export const FloatingPanel = memo(function FloatingPanel({
   // Resolve the stored/default rect, clamping below-minimums so a stale
   // persisted rect can't render the panel too small to interact with.
   const rawRect = getPanelRect(id, defaultRect)
+
+  // Register the panel into the layout map on first mount so layout-wide
+  // operations like tilePanels see it even before any drag/resize/click.
+  // setPanelRect merges into any existing entry, so this is a no-op when a
+  // stored rect already exists.
+  const registeredRef = useRef(false)
+  useEffect(() => {
+    if (registeredRef.current) return
+    registeredRef.current = true
+    setPanelRect(id, rawRect)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount with the resolved initial rect
+  }, [])
   const rect: PanelRect = {
     ...rawRect,
     w: Math.max(rawRect.w, minW),

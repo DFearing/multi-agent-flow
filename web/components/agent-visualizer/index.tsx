@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react"
+import { usePersistedState } from "@/hooks/use-persisted-state"
 import { useAgentSimulation } from "@/hooks/use-agent-simulation"
 import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
@@ -88,14 +89,17 @@ function AgentVisualizerInner() {
 
   const selection = useSelectionState({ agents, toolCalls, discoveries })
 
+  // Panel toggles persist across reloads — closing a panel via its ✕ should
+  // stick. Saved to localStorage automatically (separate from the panel-rect
+  // layout, which has its own SAVED_KEY managed by panel-layout-provider).
   const [showStats, setShowStats] = useState(true)
   const [showHexGrid, setShowHexGrid] = useState(true)
-  const [showCostOverlay, setShowCostOverlay] = useState(false)
-  const [showCostPanel, setShowCostPanel] = useState(false)
-  const [showTimeline, setShowTimeline] = useState(false)
-  const [showFileAttention, setShowFileAttention] = useState(false)
-  const [showTranscript, setShowTranscript] = useState(false)
-  const [showMessageFeed, setShowMessageFeed] = useState(true)
+  const [showCostOverlay, setShowCostOverlay] = usePersistedState('agent-flow:show-cost-overlay:v1', false)
+  const [showCostPanel, setShowCostPanel] = usePersistedState('agent-flow:show-cost-panel:v1', false)
+  const [showTimeline, setShowTimeline] = usePersistedState('agent-flow:show-timeline:v1', false)
+  const [showFileAttention, setShowFileAttention] = usePersistedState('agent-flow:show-file-attention:v1', false)
+  const [showTranscript, setShowTranscript] = usePersistedState('agent-flow:show-transcript:v1', false)
+  const [showMessageFeed, setShowMessageFeed] = usePersistedState('agent-flow:show-message-feed:v1', true)
   const [detailCardHidden, setDetailCardHidden] = useState(false)
 
   // When the user selects a different agent, re-show the detail card.
