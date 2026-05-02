@@ -91,6 +91,38 @@ Reproducer artifacts:
 
 The bench drives 3 concurrent sim sessions under `concurrent` workload at 4× CPU throttle. With 1 canvas / 1 idle session at native CPU speed, bloom's per-frame cost (~2-3ms) is invisible inside a 16.7ms frame budget. Also, Chrome DevTools' built-in FPS meter measures compositor frames, not the canvas's `requestAnimationFrame` rate — they diverge under throttle. Use the `?perf` overlay (in-canvas FPS counter) and 3 sim sessions to reproduce manually.
 
+## Final comparison after all Canvas2D PRs (2026-05-02, commit `c80e5d8`)
+
+After merging the bloom toggle (#61), hex-grid cache (#62), text/overlay caches (#63), measureRef stabilization (#60), and bloom throttle (#65). 4× CPU throttle, 3 sim sessions, 30s + 90s.
+
+| Configuration | FPS | Long-task total | Frame p95 | React commits |
+|---|---|---|---|---|
+| **PR 56 baseline** (98df60b, before any opts) | 9.5 | 79.8s | ~150ms | 3048 |
+| Pre-Canvas2D PRs (3f2f4ac: only #58 + #61) | 11.7 | 81.9s | 115ms | 1368 |
+| Current main, defaults (bloom on, throttle 1) | 11.9 | 82.0s | 112ms | 1250 |
+| Current main, bloom throttle=2 | **13.1** | 80.2s | 103ms | 1305 |
+| Current main, bloom OFF | **17.9** | **41.4s** | **83ms** | 1349 |
+
+### What materialized
+
+- **PR #58 (React shared-ticker + memo)**: 3048 → 1368 commits (**−55%**), persisted through subsequent PRs. Real win.
+- **PR #65 (bloom throttle=2)**: defaults 11.9 → 13.1 FPS (**+10%**) with the visual still present. Real, user-opt-in.
+- **PR #61 (bloom toggle OFF)**: defaults 11.9 → 17.9 FPS (**+50%**), long-tasks 82s → 41s (**−50%**). Real, user-opt-in.
+
+### What did NOT materialize at the bench level
+
+- **PR #62 (hex-grid offscreen cache) + PR #63 (text/overlay caches)**: stack 3f2f4ac (11.7 FPS, 81.9s) → current main (11.9 FPS, 82.0s) is noise-level. The combined ~5% predicted CPU savings from `fillText`/`closePath` self-time did not translate to wall-clock improvement at 4× throttle. See investigation in [TODO: link to follow-up issue] for hypothesis & evidence.
+
+### Reproducer
+
+```bash
+node bench/profile-long-tasks.mjs                      # bloom on, throttle 1 (default)
+node bench/profile-long-tasks.mjs --bloom-throttle=2   # bloom on, throttle 2
+node bench/profile-long-tasks.mjs --no-bloom           # bloom disabled
+```
+
+Outputs land in `bench/results/long-tasks-{summary,profile,report}{,-no-bloom,-throttle2}.{json,cpuprofile,md}`.
+
 ## What remains unattributed
 
 - **21.4% in `(program)`** — V8's catch-all bucket. Almost certainly some mix of GC pauses, deoptimizations, and JIT compile/parse. To attribute, a future pass needs CDP `Tracing.start` with `disabled-by-default-v8.cpu_profiler` + `v8.runtime` categories (much more invasive than `Profiler.start`). Filing as a follow-up rather than a third hot-path issue because there's no actionable code change yet.

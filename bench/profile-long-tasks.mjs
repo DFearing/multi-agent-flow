@@ -49,11 +49,13 @@ const args = process.argv.slice(2)
 if (args.includes('--smoke')) { WARMUP_MS = 15_000; MEASURE_MS = 30_000 }
 if (args.includes('--no-throttle')) THROTTLE = 1
 const NO_BLOOM = args.includes('--no-bloom')
+const throttleFlag = args.find(a => a.startsWith('--bloom-throttle='))
+const BLOOM_THROTTLE = throttleFlag ? parseInt(throttleFlag.split('=')[1], 10) : 1
 const measureFlag = args.find(a => a.startsWith('--measure='))
 if (measureFlag) MEASURE_MS = parseInt(measureFlag.split('=')[1], 10) * 1000
 const warmupFlag = args.find(a => a.startsWith('--warmup='))
 if (warmupFlag) WARMUP_MS = parseInt(warmupFlag.split('=')[1], 10) * 1000
-const SUFFIX = NO_BLOOM ? '-no-bloom' : ''
+const SUFFIX = NO_BLOOM ? '-no-bloom' : (BLOOM_THROTTLE > 1 ? `-throttle${BLOOM_THROTTLE}` : '')
 
 const now = () => new Date().toISOString().slice(11, 19)
 const log = (...a) => console.log(`[${now()}]`, ...a)
@@ -324,6 +326,11 @@ async function run() {
         content: `try { localStorage.setItem('agent-flow:effects:v1', JSON.stringify({bloom:false,particles:true,bubbles:true,backgroundParticles:true})); } catch {}`,
       })
     }
+    if (BLOOM_THROTTLE > 1) {
+      await ctx.addInitScript({
+        content: `try { localStorage.setItem('agent-flow:bloom-throttle:v1', '${BLOOM_THROTTLE}'); } catch {}`,
+      })
+    }
     const page = await ctx.newPage()
     const cdp = await ctx.newCDPSession(page)
 
@@ -391,7 +398,7 @@ async function run() {
 
     const summaryPath = path.join(RESULTS_DIR, `long-tasks-summary${SUFFIX}.json`)
     fs.writeFileSync(summaryPath, JSON.stringify({
-      meta: { commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS, simCount: SIM_COUNT, bloom: !NO_BLOOM },
+      meta: { commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS, simCount: SIM_COUNT, bloom: !NO_BLOOM, bloomThrottle: BLOOM_THROTTLE },
       bench: summary.summary,
     }, null, 2))
     log(`wrote ${summaryPath}`)
