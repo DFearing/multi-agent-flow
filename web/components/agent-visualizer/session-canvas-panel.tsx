@@ -4,10 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAgentSimulation } from '@/hooks/use-agent-simulation'
 import { usePanelLayout } from '@/hooks/use-panel-layout'
 import { useSessionNames } from '@/hooks/use-session-names'
+import { usePersistedState } from '@/hooks/use-persisted-state'
 import { colorForSession } from '@/lib/colors'
 import { AgentCanvas } from './canvas'
 import { ControlBar } from './control-bar'
 import { FloatingPanel } from './floating-panel'
+import { CanvasZoomControl } from './canvas-zoom-control'
 import { useSessionStatsDispatch, type SessionStats } from './session-stats-provider'
 import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
 
@@ -52,8 +54,6 @@ interface SessionCanvasPanelProps {
   /** ✕-close handler. Parent persists the hidden state and shows a chip
    *  in the top bar so the canvas can be reopened. */
   onClose?: () => void
-  /** Minimum auto-fit scale, 0 = no minimum. */
-  minZoomLevel?: number
 }
 
 export function SessionCanvasPanel({
@@ -67,7 +67,6 @@ export function SessionCanvasPanel({
   onAgentClick, onAgentHover, onAgentDrag,
   onContextMenu, onToolCallClick, onDiscoveryClick,
   onClose,
-  minZoomLevel,
 }: SessionCanvasPanelProps) {
   const panelId = `canvas-slot-${slot}` as const
   // Local cursor over the bridge's per-session event log. Slice only when
@@ -144,8 +143,16 @@ export function SessionCanvasPanel({
   const hadAgentsRef = useRef(false)
   if (sim.agents.size > 0) hadAgentsRef.current = true
 
-  const { panels, bootedAsAttached } = usePanelLayout()
+  const { panels, bootedAsAttached, instanceId } = usePanelLayout()
   const explicitlyVisible = panels[panelId]?.hidden === false
+
+  // Per-canvas auto-fit zoom floor. Keyed by slot (stable across reloads)
+  // and instance so two browser windows watching the same session can have
+  // different settings. 0 = off.
+  const [minZoomLevel, setMinZoomLevel] = usePersistedState<number>(
+    `agent-flow:min-zoom:v1:${instanceId}:slot-${slot}`,
+    0,
+  )
 
   const sessionColor = colorForSession(sessionId)
 
@@ -289,6 +296,7 @@ export function SessionCanvasPanel({
             showCostOverlay={showCostOverlay}
             minZoomLevel={minZoomLevel}
           />
+          <CanvasZoomControl value={minZoomLevel} onChange={setMinZoomLevel} />
         </div>
         <ControlBar
           isPlaying={sim.isPlaying}
