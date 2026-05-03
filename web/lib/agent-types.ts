@@ -3,6 +3,17 @@
 
 export type AgentState = 'idle' | 'thinking' | 'tool_calling' | 'complete' | 'error' | 'paused' | 'waiting_permission'
 
+/** Agent states that count as "actively working" — used for the radial-glow
+ *  background effect and for camera-anchor selection (auto-fit prefers the
+ *  active sub-agent when the orchestrator is idle). Kept as a const set so the
+ *  predicate stays in one place; both call sites must see the same behavior. */
+export const ACTIVE_AGENT_STATES = new Set<AgentState>(['thinking', 'tool_calling', 'waiting_permission'])
+
+/** Type guard / predicate matching ACTIVE_AGENT_STATES. */
+export function isActiveAgentState(state: AgentState): boolean {
+  return ACTIVE_AGENT_STATES.has(state)
+}
+
 // Context window composition — the key insight
 export interface ContextBreakdown {
   systemPrompt: number   // fixed cost, always there
