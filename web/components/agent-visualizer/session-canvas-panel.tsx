@@ -16,6 +16,7 @@ import { CanvasZoomControl } from './canvas-zoom-control'
 import { useSessionStatsDispatch, type SessionStats } from './session-stats-provider'
 import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
 import type { EffectToggles } from '@/hooks/use-perf-settings'
+import { dlog } from '@/lib/debug-flag'
 
 /** Stable empty-events sentinel — keeps the externalEvents prop reference
  *  identical across idle renders so useAgentSimulation's animate callback
@@ -79,6 +80,8 @@ function SessionCanvasPanelImpl({
   const newEvents: readonly SimulationEvent[] = consumedRef.current < sliceEnd
     ? (log.slice(consumedRef.current, sliceEnd) as SimulationEvent[])
     : EMPTY_EVENTS
+
+  dlog('panel render', sessionId.slice(0, 8), 'logLen=', log.length, 'newEvents=', newEvents.length, 'consumed=', consumedRef.current)
 
   const sim = useSessionSimulation(manager, sessionId, {
     externalEvents: newEvents,
