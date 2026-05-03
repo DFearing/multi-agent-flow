@@ -179,7 +179,10 @@ describe('ToolCallsLayer', () => {
     expect(layer.entryCount).toBe(0)
   })
 
-  it('tool calls that disappear between frames are hidden', () => {
+  it('destroys entries for tool calls that disappear between frames', () => {
+    // Stale-id sweep (CR-3): tool-call entries are destroyed when their id
+    // no longer appears in the input. Previously entries were merely hidden,
+    // accumulating monotonically over long sessions.
     const layer = new ToolCallsLayer()
 
     const toolCalls1 = new Map<string, ToolCallNode>([
@@ -189,12 +192,14 @@ describe('ToolCallsLayer', () => {
     layer.update(toolCalls1, 0)
     expect(layer.getEntry('t1')!.container.visible).toBe(true)
     expect(layer.getEntry('t2')!.container.visible).toBe(true)
+    expect(layer.entryCount).toBe(2)
 
     const toolCalls2 = new Map<string, ToolCallNode>([
       ['t1', makeToolCall('t1')],
     ])
     layer.update(toolCalls2, 1)
     expect(layer.getEntry('t1')!.container.visible).toBe(true)
-    expect(layer.getEntry('t2')!.container.visible).toBe(false)
+    expect(layer.getEntry('t2')).toBeUndefined()
+    expect(layer.entryCount).toBe(1)
   })
 })

@@ -191,10 +191,14 @@ export class DiscoveriesLayer {
       }
     }
 
-    // Hide entries for discoveries that no longer exist
+    // Drop entries for discoveries that no longer exist this frame.
+    // Discoveries with opacity < 0.05 are skipped earlier in the loop, so
+    // they fall out of aliveIds and get destroyed here. Previously entries
+    // were merely hidden, leaking GPU buffers across long sessions.
     for (const [id, entry] of this.entries) {
       if (!aliveIds.has(id)) {
-        entry.container.visible = false
+        entry.container.destroy({ children: true })
+        this.entries.delete(id)
       }
     }
   }

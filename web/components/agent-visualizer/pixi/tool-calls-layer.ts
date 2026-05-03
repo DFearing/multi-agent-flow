@@ -213,10 +213,14 @@ export class ToolCallsLayer {
       }
     }
 
-    // Hide entries for tool calls that no longer exist
+    // Drop entries for tool calls that no longer exist this frame. The
+    // simulation already enforces fade timing (animate.ts evicts faded
+    // tool calls only after opacity reaches 0), so layers can mirror its
+    // decisions without a grace period.
     for (const [id, entry] of this.entries) {
       if (!aliveIds.has(id)) {
-        entry.container.visible = false
+        entry.container.destroy({ children: true })
+        this.entries.delete(id)
       }
     }
   }

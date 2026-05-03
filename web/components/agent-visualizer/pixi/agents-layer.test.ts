@@ -250,7 +250,11 @@ describe('AgentsLayer', () => {
     expect(layer.entryCount).toBe(0)
   })
 
-  it('agents that disappear between frames are hidden', () => {
+  it('destroys entries for agents that disappear between frames', () => {
+    // Stale-id sweep (CR-3): when an agent id no longer appears in the
+    // current frame's input, its entry is destroyed and removed from the
+    // map. Previously entries were merely hidden, so the entry map grew
+    // monotonically over long sessions.
     const layer = new AgentsLayer()
 
     // Frame 1: two agents
@@ -261,14 +265,16 @@ describe('AgentsLayer', () => {
     layer.update(agents1, null, null, false, 0)
     expect(layer.getEntry('a1')!.container.visible).toBe(true)
     expect(layer.getEntry('a2')!.container.visible).toBe(true)
+    expect(layer.entryCount).toBe(2)
 
-    // Frame 2: only a1 remains
+    // Frame 2: only a1 remains — a2 entry is destroyed and removed
     const agents2 = new Map<string, Agent>([
       ['a1', makeAgent('a1')],
     ])
     layer.update(agents2, null, null, false, 1)
     expect(layer.getEntry('a1')!.container.visible).toBe(true)
-    expect(layer.getEntry('a2')!.container.visible).toBe(false)
+    expect(layer.getEntry('a2')).toBeUndefined()
+    expect(layer.entryCount).toBe(1)
   })
 
   it('created entries have eventMode set to static', () => {

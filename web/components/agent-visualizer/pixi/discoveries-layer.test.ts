@@ -179,16 +179,21 @@ describe('DiscoveriesLayer', () => {
     expect(layer.entryCount).toBe(0)
   })
 
-  it('discoveries that disappear between frames are hidden', () => {
+  it('destroys entries for discoveries that disappear between frames', () => {
+    // Stale-id sweep (CR-3): discovery entries are destroyed when their id
+    // no longer appears in the input. Previously entries were merely hidden,
+    // leaking GPU buffers over long sessions.
     const layer = new DiscoveriesLayer()
     const agents = new Map<string, Agent>([['a1', makeAgent('a1')]])
 
     layer.update([makeDiscovery('d1'), makeDiscovery('d2')], agents)
     expect(layer.getEntry('d1')!.container.visible).toBe(true)
     expect(layer.getEntry('d2')!.container.visible).toBe(true)
+    expect(layer.entryCount).toBe(2)
 
     layer.update([makeDiscovery('d1')], agents)
     expect(layer.getEntry('d1')!.container.visible).toBe(true)
-    expect(layer.getEntry('d2')!.container.visible).toBe(false)
+    expect(layer.getEntry('d2')).toBeUndefined()
+    expect(layer.entryCount).toBe(1)
   })
 })
