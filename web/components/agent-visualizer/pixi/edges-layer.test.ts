@@ -321,4 +321,161 @@ describe('EdgesLayer', () => {
     expect(layer.getEntry('e2')).toBeUndefined()
     expect(layer.entryCount).toBe(1)
   })
+
+  // ─── CR-1: vertex-offset width assertions ────────────────────────────────
+  // The previous MeshRope path silently ignored the `width` constructor
+  // option; every edge rendered at the rope texture's native height. The
+  // current strip Mesh encodes width directly into the geometry by placing
+  // top/bottom vertices at ±halfWidth along the precomputed sample normal.
+  // These tests pin down that contract: they read the raw vertex buffer and
+  // assert the exact offsets. A regression to MeshRope (or any geometry
+  // that ignores the per-edge-type half-width) would fail here.
+
+  it('CR-1: parent-child edges place top/bottom vertices ±1.5 along the sample normal', () => {
+    // BEAM.parentChild.startW = 3 → halfWidth = 1.5
+    const layer = new EdgesLayer()
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1', 0, 0)],
+      ['a2', makeAgent('a2', 320, 160)],
+    ])
+    const edges = [makeEdge('e1', 'a1', 'a2', 'parent-child')]
+
+    layer.update(edges, [], agents, new Map(), 0)
+
+    const entry = layer.getEntry('e1')!
+    const buffer = entry.mesh.geometry.getBuffer('aPosition') as unknown as { data: Float32Array }
+    const positions = buffer.data
+    expect(positions.length).toBe(mockPolylineSamples.length * 4)
+
+    // Sample three indices spanning the polyline; assert offsets are
+    // EXACTLY ±halfWidth * normal (mockPolylineSamples have nx=0, ny=1).
+    const halfW = 1.5
+    for (const i of [0, 10, mockPolylineSamples.length - 1]) {
+      const s = mockPolylineSamples[i]
+      const o = i * 4
+      const topX = positions[o + 0]
+      const topY = positions[o + 1]
+      const botX = positions[o + 2]
+      const botY = positions[o + 3]
+      // top  = (s.x + nx*halfW, s.y + ny*halfW)
+      // bot  = (s.x - nx*halfW, s.y - ny*halfW)
+      expect(topX).toBeCloseTo(s.x + s.nx * halfW)
+      expect(topY).toBeCloseTo(s.y + s.ny * halfW)
+      expect(botX).toBeCloseTo(s.x - s.nx * halfW)
+      expect(botY).toBeCloseTo(s.y - s.ny * halfW)
+      // Euclidean distance between top and bot must equal beamWidth (3).
+      const dx = topX - botX
+      const dy = topY - botY
+      expect(Math.sqrt(dx * dx + dy * dy)).toBeCloseTo(3)
+    }
+  })
+
+  it('CR-1: tool edges place top/bottom vertices ±0.75 along the sample normal', () => {
+    // BEAM.tool.startW = 1.5 → halfWidth = 0.75. A regression that
+    // re-introduces a single rope width across edge types would still pass
+    // the parent-child test above; this asserts the per-type discrimination.
+    const layer = new EdgesLayer()
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1', 0, 0)],
+    ])
+    const toolCalls = new Map<string, ToolCallNode>([
+      ['t1', makeToolCall('t1', 200, 100)],
+    ])
+    const edges = [makeEdge('e1', 'a1', 't1', 'tool')]
+
+    layer.update(edges, [], agents, toolCalls, 0)
+
+    const entry = layer.getEntry('e1')!
+    const buffer = entry.mesh.geometry.getBuffer('aPosition') as unknown as { data: Float32Array }
+    const positions = buffer.data
+    const halfW = 0.75
+    for (const i of [0, 16, mockPolylineSamples.length - 1]) {
+      const s = mockPolylineSamples[i]
+      const o = i * 4
+      // The Euclidean width for tool edges must be 1.5, not 3.
+      const topX = positions[o + 0]
+      const topY = positions[o + 1]
+      const botX = positions[o + 2]
+      const botY = positions[o + 3]
+      expect(topX).toBeCloseTo(s.x + s.nx * halfW)
+      expect(topY).toBeCloseTo(s.y + s.ny * halfW)
+      expect(botX).toBeCloseTo(s.x - s.nx * halfW)
+      expect(botY).toBeCloseTo(s.y - s.ny * halfW)
+      const dx = topX - botX
+      const dy = topY - botY
+      expect(Math.sqrt(dx * dx + dy * dy)).toBeCloseTo(1.5)
+    }
+  })
+
+  it('CR-1: GPU position buffer is flagged dirty (update() called) on every frame', () => {
+    // Without the explicit getBuffer('aPosition').update() call, the
+    // mutated positions never reach the GPU and the mesh would freeze at
+    // its initial (zero-filled) geometry. A refactor that drops that call
+    // would silently break edge animation; this test catches it.
+    const layer = new EdgesLayer()
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1', 0, 0)],
+      ['a2', makeAgent('a2', 100, 100)],
+    ])
+    const edges = [makeEdge('e1', 'a1', 'a2')]
+
+    layer.update(edges, [], agents, new Map(), 0)
+    const entry = layer.getEntry('e1')!
+    const buffer = entry.mesh.geometry.getBuffer('aPosition') as unknown as { _updates: number }
+    expect(buffer._updates).toBeGreaterThanOrEqual(1)
+    const updatesAfterFrame1 = buffer._updates
+
+    // Frame 2: same edge, different time. Even if endpoints did not move,
+    // the layer must re-flag the buffer because positions are recomputed
+    // every frame from the polyline samples.
+    layer.update(edges, [], agents, new Map(), 0.016)
+    expect(buffer._updates).toBeGreaterThan(updatesAfterFrame1)
+  })
+
+  // ─── CR-3: leak prevention with destroy() spy ───────────────────────────
+
+  it('CR-3: stale entries are destroyed (mesh.destroy spied) and dropped from the map', () => {
+    // Strengthens the existing "destroys mesh entries" test by:
+    //   (1) running 3 stable frames (so the buggy "hide only" code would
+    //       have grown the entries Map across frames),
+    //   (2) feeding zero edges in the final frame (full sweep),
+    //   (3) spying on Mesh.destroy to confirm the GPU teardown runs, not
+    //       just a Map.delete.
+    const layer = new EdgesLayer()
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1', 0, 0)],
+      ['a2', makeAgent('a2', 100, 100)],
+      ['a3', makeAgent('a3', 200, 200)],
+      ['a4', makeAgent('a4', 300, 300)],
+      ['a5', makeAgent('a5', 400, 400)],
+      ['a6', makeAgent('a6', 500, 500)],
+    ])
+    const edges = [
+      makeEdge('e1', 'a1', 'a2'),
+      makeEdge('e2', 'a3', 'a4'),
+      makeEdge('e3', 'a5', 'a6'),
+      makeEdge('e4', 'a2', 'a4'),
+      makeEdge('e5', 'a3', 'a5'),
+    ]
+
+    // Three stable frames — entries should stabilise at 5.
+    layer.update(edges, [], agents, new Map(), 0)
+    layer.update(edges, [], agents, new Map(), 0.016)
+    layer.update(edges, [], agents, new Map(), 0.032)
+    expect(layer.entryCount).toBe(5)
+
+    // Spy on each entry's mesh.destroy to confirm cleanup runs.
+    const destroySpies = ['e1', 'e2', 'e3', 'e4', 'e5'].map(id => {
+      const entry = layer.getEntry(id)!
+      return vi.spyOn(entry.mesh, 'destroy')
+    })
+
+    // Frame 4: zero edges → full sweep.
+    layer.update([], [], agents, new Map(), 0.048)
+
+    expect(layer.entryCount).toBe(0)
+    for (const spy of destroySpies) {
+      expect(spy).toHaveBeenCalled()
+    }
+  })
 })

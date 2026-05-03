@@ -84,15 +84,23 @@ vi.mock('./pixi-app', () => ({
 }))
 
 // ─── Mock GlyphAtlas ─────────────────────────────────────────────────────
+//
+// vi.hoisted lets `getGlyphSpy` be referenced inside the vi.mock factory
+// (which is hoisted above all imports). The spy lets CR-2 tests count
+// exactly how many glyph requests the layer made for stats overlay text.
+
+const { getGlyphSpy } = vi.hoisted(() => ({
+  getGlyphSpy: vi.fn((text: string, _color: string, fontSize?: number) => ({
+    texture: { destroy: () => {}, source: {} },
+    width: text.length * 6,
+    height: (fontSize ?? 10) * 1.4,
+  })),
+}))
 
 vi.mock('./glyph-atlas', () => ({
   GlyphAtlas: class {
     getGlyph(text: string, color: string, fontSize?: number) {
-      return {
-        texture: { destroy: () => {}, source: {} },
-        width: text.length * 6,
-        height: (fontSize ?? 10) * 1.4,
-      }
+      return getGlyphSpy(text, color, fontSize)
     }
     dispose() { /* no-op */ }
   },
@@ -300,5 +308,84 @@ describe('AgentsLayer', () => {
 
     expect(layer.getEntry('a1')!.pulseRing.visible).toBe(true)
     expect(layer.getEntry('a2')!.pulseRing.visible).toBe(false)
+  })
+
+  // ─── CR-3: leak prevention focused on sub-agents ─────────────────────────
+  // The earlier "destroys entries" test covers a single-frame transition.
+  // This pins down behaviour over a multi-frame window using sub-agents
+  // (isMain=false, the population the simulation actually evicts) so a
+  // future "grace period" or "isMain only" condition added to the sweep
+  // would surface here.
+
+  it('CR-3: sub-agents stable for 5 frames then absent → entries map empties', () => {
+    const layer = new AgentsLayer()
+
+    const subAgents = new Map<string, Agent>([
+      ['s1', makeAgent('s1', { isMain: false })],
+      ['s2', makeAgent('s2', { isMain: false })],
+      ['s3', makeAgent('s3', { isMain: false })],
+    ])
+
+    for (let frame = 0; frame < 5; frame++) {
+      layer.update(subAgents, null, null, false, frame * 0.016)
+    }
+    expect(layer.entryCount).toBe(3)
+
+    // Frame 6: zero sub-agents — full sweep.
+    layer.update(new Map(), null, null, false, 5 * 0.016)
+    expect(layer.entryCount).toBe(0)
+    expect(layer.getEntry('s1')).toBeUndefined()
+    expect(layer.getEntry('s2')).toBeUndefined()
+    expect(layer.getEntry('s3')).toBeUndefined()
+  })
+
+  // ─── CR-2: glyph-request cap on stats overlay ────────────────────────────
+  // Pre-fix the stats overlay was a single sprite carrying
+  // `${toolCalls} tools · ${timeAlive.toFixed(1)}s`. Because timeAlive
+  // ticks every frame (~60Hz), a unique glyph was uploaded to the atlas
+  // every frame — pumping the LRU and pinning the perf regression.
+  //
+  // Post-fix the overlay is split into a stable label sprite and a value
+  // sprite quantized to integer seconds. Over 100 frames covering 10
+  // simulated seconds, the label requires 1 glyph (toolCalls constant)
+  // and the value requires at most 11 (one per integer-second crossing,
+  // plus the initial render).
+  //
+  // A regression that drops the integer quantization or recombines the
+  // sprite would push the value sprite back into the 100s — this test
+  // catches that.
+
+  it('CR-2: stats overlay value sprite re-renders ≤11 times across 100 frames at 10Hz', () => {
+    const layer = new AgentsLayer()
+    const agent = makeAgent('a1', { toolCalls: 3, timeAlive: 0 })
+    const agents = new Map<string, Agent>([['a1', agent]])
+
+    // Warm-up: spawn the entry and capture initial glyph requests so
+    // subsequent calls are attributable to the stats overlay updates only.
+    layer.update(agents, null, null, true, 0)
+    getGlyphSpy.mockClear()
+
+    // 100 frames, +0.1s per frame → timeAlive sweeps 0.1 .. 10.0
+    // Floor(timeAlive) crosses 10 distinct integer seconds (0..9).
+    for (let frame = 1; frame <= 100; frame++) {
+      agent.timeAlive = frame * 0.1
+      layer.update(agents, null, null, true, frame * 0.016)
+    }
+
+    // Filter the spy calls by sprite kind. The value text matches /^\d+s$/
+    // (e.g. "0s", "1s"); the label text is "3 tools · " (toolCalls=3).
+    const allCalls = getGlyphSpy.mock.calls
+    const valueCalls = allCalls.filter(([text]) => /^\d+s$/.test(text))
+    const labelCalls = allCalls.filter(([text]) => text === '3 tools · ')
+
+    // Value sprite: one per integer-second crossing (0..9) — ≤ 11 leaves
+    // a bucket for the initial render.
+    expect(valueCalls.length).toBeGreaterThan(0) // at least re-rendered
+    expect(valueCalls.length).toBeLessThanOrEqual(11)
+
+    // Label sprite: toolCalls is constant, so label stays at 0 calls
+    // after warm-up (or 1 if the first warm-up call was missed). Allow
+    // for either; the contract is "no per-frame churn".
+    expect(labelCalls.length).toBeLessThanOrEqual(1)
   })
 })
