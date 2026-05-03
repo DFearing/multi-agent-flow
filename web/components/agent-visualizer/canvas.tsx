@@ -4,7 +4,7 @@ import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
-import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
+import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED, PERF_STRESS_MULTIPLIER } from '@/lib/canvas-constants'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground, createHexGridCache, type HexGridCache } from './background-layer'
 import {
@@ -398,15 +398,22 @@ export function AgentCanvas({
       // when zoomed in or with many agents/edges off-screen.
       const viewBounds = computeViewBounds(w, h, transform)
 
-      drawDiscoveryConnections(ctx, discoveries, agents, viewBounds)
-      drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current, viewBounds)
-      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, viewBounds)
-      drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId, viewBounds)
-      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
-      drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
-      if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
-      drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current, viewBounds)
-      drawEffects(ctx, effectsRef.current)
+      // Stress-test multiplier (debug-only, gated by `?stress=N`). Repeats
+      // the world-render block N times against the SAME backing store so we
+      // pay N× the scripting/render cost without changing the simulation
+      // shape. At 1× this is a single-iteration loop with no overhead;
+      // PERF_STRESS_MULTIPLIER is module-scope and clamped to [1, 64].
+      for (let stressIter = 0; stressIter < PERF_STRESS_MULTIPLIER; stressIter++) {
+        drawDiscoveryConnections(ctx, discoveries, agents, viewBounds)
+        drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current, viewBounds)
+        drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, viewBounds)
+        drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId, viewBounds)
+        drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
+        drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
+        if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
+        drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current, viewBounds)
+        drawEffects(ctx, effectsRef.current)
+      }
 
       if (selectedAgentId) {
         const agent = agents.get(selectedAgentId)
@@ -451,6 +458,15 @@ export function AgentCanvas({
           const sorted = [...perf.frameTimes].sort((a, b) => a - b)
           perf.p95 = sorted[Math.floor(sorted.length * 0.95)] || 0
         }
+
+        // Estimate the display's vsync interval as 1000 / observed FPS.
+        // When work fits the budget, rAF callbacks arrive at the display
+        // refresh rate, so observed FPS settles at the cap (60/120/144/etc).
+        // The first second after mount has perf.fps == 0 — fall back to a
+        // 60Hz default so we don't divide by zero or print Infinity.
+        const vsyncMs = perf.fps > 0 ? 1000 / perf.fps : 16.67
+        const headroomPct = Math.max(0, Math.min(100, ((vsyncMs - frameMs) / vsyncMs) * 100))
+
         const po = PERF_OVERLAY
         const textX = po.x + po.padding
         let textY = po.y + po.lineHeight + 2
@@ -459,9 +475,13 @@ export function AgentCanvas({
         ctx.fillRect(po.x, po.y, po.width, po.height)
         ctx.font = po.font
         ctx.fillStyle = perf.fps < po.fpsWarning ? po.fpsWarningColor : perf.fps < po.fpsCaution ? po.fpsCautionColor : po.fpsGoodColor
-        ctx.fillText(`FPS: ${perf.fps}`, textX, textY); textY += po.lineHeight
+        const stressTag = PERF_STRESS_MULTIPLIER > 1 ? `  ×${PERF_STRESS_MULTIPLIER}` : ''
+        ctx.fillText(`FPS: ${perf.fps}${stressTag}`, textX, textY); textY += po.lineHeight
         ctx.fillStyle = po.textColor
         ctx.fillText(`Frame: ${frameMs.toFixed(1)}ms  P95: ${perf.p95.toFixed(1)}ms`, textX, textY); textY += po.lineHeight
+        // Headroom: fraction of the vsync budget left after JS work. Useful
+        // when FPS is pinned at the display cap and improvements are hidden.
+        ctx.fillText(`Headroom: ${frameMs.toFixed(1)} / ${vsyncMs.toFixed(2)}ms (${headroomPct.toFixed(0)}% free)`, textX, textY); textY += po.lineHeight
         ctx.fillText(`Agents: ${agents.size}`, textX, textY); textY += po.lineHeight
         ctx.fillText(`Tool calls: ${toolCalls.size}`, textX, textY); textY += po.lineHeight
         ctx.fillText(`Particles: ${particles.length}`, textX, textY); textY += po.lineHeight
