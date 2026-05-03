@@ -9,13 +9,17 @@ const HEX_GRID_SIZE = 60
 // Single-entry cache per AgentCanvas instance. Rebuilds when the cache key
 // changes; otherwise blits the pre-rendered off-screen canvas.
 //
-// The hex pulse animation depends on `time`; we quantize it to ~200ms steps
-// so the cache hits ~12/13 frames at 60fps while the animation still reads
-// as alive. This is the sole visual deviation from the uncached path — the
-// pulse updates at ~5Hz instead of every frame.
+// The hex pulse animation depends on `time`; we quantize it to ~400ms steps
+// so the cache hits most frames while the animation still reads as alive.
+// Camera position and scale are excluded / quantized in the cache key so that
+// panning and auto-fit lerping never bust the cache. This is the sole visual
+// deviation from the uncached path — the pulse updates at ~2.5Hz instead of
+// every frame, and the grid's camera tracking lags by up to one quant tick.
 
-/** Quantization step for the time component of the cache key (seconds). */
-const HEX_TIME_QUANT = 0.2
+/** Quantization step for the time component of the cache key (seconds).
+ *  At 0.4s the pulse animation updates at 2.5Hz — still perceptible but
+ *  yielding ~75% cache hit rate at 10 FPS (vs ~50% with the original 0.2s). */
+const HEX_TIME_QUANT = 0.4
 
 export interface HexGridCache {
   canvas: OffscreenCanvas | HTMLCanvasElement
@@ -31,40 +35,51 @@ export function createHexGridCache(): HexGridCache {
   return { canvas, key: '' }
 }
 
+/** Scale quantization step — the hex grid is so faint that a 2% scale
+ *  difference is invisible, and quantizing avoids cache-busting during
+ *  camera auto-fit lerping (which changes scale by tiny amounts every frame). */
+const HEX_SCALE_QUANT = 0.02
+
 /**
  * Build a cache key from the values that affect the hex grid's pixel output.
- * Camera translation is reduced mod the hex tile period so panning within a
- * tile period reuses the same rendered grid (the grid tiles at `size * 1.5`
- * horizontally and `hexHeight` vertically in world space, which maps to
- * `period * scale` in screen space where tx/ty live).
+ *
+ * Camera translation is deliberately EXCLUDED. On cache miss the grid is
+ * rendered at the current camera transform; on subsequent hits the stale
+ * bitmap is blitted as-is. Because the hex grid is drawn at very low alpha
+ * (~0.05-0.15), the slight positional staleness between quant ticks is
+ * visually imperceptible.
+ *
+ * Scale is quantized to 2% steps so auto-fit lerping does not bust the cache.
+ * Time is quantized to HEX_TIME_QUANT steps (400ms) for the pulse animation.
  */
+
 function hexCacheKey(
   width: number,
   height: number,
   dpr: number,
   scale: number,
-  tx: number,
-  ty: number,
   time: number,
 ): string {
-  const size = HEX_GRID_SIZE
-  const hexHeight = size * Math.sqrt(3)
-  // Screen-space repeat distance for the hex tiling.
-  const periodX = size * 1.5 * scale
-  const periodY = hexHeight * scale
-
-  // Reduce camera offset to the residual within one screen-space tile period.
-  // Round to 2 decimal places so floating-point jitter doesn't produce
-  // distinct keys for what amounts to the same pixel output.
-  const modX = Math.round(((tx % periodX) + periodX) % periodX * 100) / 100
-  const modY = Math.round(((ty % periodY) + periodY) % periodY * 100) / 100
   const timeQ = Math.round(time / HEX_TIME_QUANT)
-  return `${width}|${height}|${dpr}|${scale.toFixed(4)}|${modX}|${modY}|${timeQ}`
+  const scaleQ = Math.round(scale / HEX_SCALE_QUANT)
+  return `${width}|${height}|${dpr}|${scaleQ}|${timeQ}`
 }
 
 /**
  * Draw the hex grid, using the off-screen cache when possible.
  * `dpr` is `window.devicePixelRatio` — the cache renders in device pixels.
+ *
+ * Strategy: the cache key excludes camera position entirely. On a cache miss
+ * (triggered by size/dpr/scale/time-quant change), the hex grid is rendered
+ * into the off-screen canvas at the current camera transform. On subsequent
+ * hits the cached bitmap is blitted as-is. Because the hex grid is drawn at
+ * very low alpha (~0.05–0.15) and the camera rarely moves more than a few
+ * pixels between 200ms quant ticks, the stale-camera blit is visually
+ * indistinguishable from a fresh render.
+ *
+ * This trades pixel-perfect camera tracking of the background hex grid for a
+ * massive reduction in `closePath`/`stroke` calls — the grid is only
+ * re-rendered ~5 times per second instead of every frame.
  */
 function drawHexGridCached(
   ctx: CanvasRenderingContext2D,
@@ -75,7 +90,7 @@ function drawHexGridCached(
   time: number,
   cache: HexGridCache,
 ): void {
-  const key = hexCacheKey(width, height, dpr, transform.scale, transform.x, transform.y, time)
+  const key = hexCacheKey(width, height, dpr, transform.scale, time)
 
   if (cache.key !== key) {
     // Resize the off-screen canvas to match the on-screen canvas in device pixels.
