@@ -142,10 +142,6 @@ export interface Particle {
   size: number
   trailLength: number
   label?: string        // what's flowing (e.g., "auth.ts 142 lines")
-  /** Cached numeric tint of `color`, populated lazily by the Pixi
-   *  renderer's particle layer. Avoids re-parsing the hex string on every
-   *  frame for every particle (4+ uses per particle per frame). */
-  _tint?: number
 }
 
 export interface SimulationEvent {

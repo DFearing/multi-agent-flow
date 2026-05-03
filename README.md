@@ -2,7 +2,7 @@
 
 Real-time visualization of Claude Code and Codex agent orchestration. Watch your agents think, branch, and coordinate as they work. [Demo video here](https://www.youtube.com/watch?v=Ud6eDrFN-TA).
 
-A performance-focused fork of [patoles/agent-flow](https://github.com/patoles/agent-flow) with multi-window support, an alternative Pixi/WebGL renderer, and a benchmark harness for tracking render-path regressions.
+A performance-focused fork of [patoles/agent-flow](https://github.com/patoles/agent-flow) with multi-window support and a benchmark harness for tracking render-path regressions.
 
 ![multi-agent-flow visualization](https://res.cloudinary.com/dxlvclh9c/image/upload/v1773924941/screenshot_e7yox3.png)
 
@@ -29,9 +29,8 @@ Claude Code is powerful, but its execution is a black box — you see the final 
 ### Fork additions
 
 - **Multi-window panels** — detach sessions into independent `window.open`'d panels; render-rAF auto-pauses for hidden / minimized panels
-- **Pixi/WebGL renderer (opt-in)** — append `?renderer=pixi` to the URL for the alternative Pixi v8 render path (one shared GL context across all viewports, GPU-accelerated bloom, glyph atlas with LRU eviction). Default remains Canvas2D
 - **Page-wide FPS indicator** in the top bar
-- **Shared simulation manager** with one rAF loop across all sessions and renderers, plus typed-array agent position buffers
+- **Shared simulation manager** with one rAF loop across all sessions, plus typed-array agent position buffers
 
 ## Getting Started
 

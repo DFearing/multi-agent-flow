@@ -128,8 +128,7 @@ export function AgentCanvas({
   // at the top of each draw frame, so it's always fresh even without re-renders.
   // The drawProps object itself is allocated ONCE — every subsequent render
   // mutates fields in place rather than reallocating. Parents re-render at
-  // ~4 Hz (UI cadence) plus drag/resize, so the closure + spread cost adds
-  // up; mirroring the Pixi twin (`pixi-canvas.tsx`) keeps both paths uniform.
+  // ~4 Hz (UI cadence) plus drag/resize, so the closure + spread cost adds up.
   const sim = simulationRef.current
   const drawPropsRef = useRef({
     agents: sim.agents, toolCalls: sim.toolCalls,

@@ -17,9 +17,8 @@ import type { Transform } from './use-canvas-camera'
  *   - stageX/stageY: stage-space coords (pixel coords relative to canvas rect,
  *     before camera transform is applied)
  *
- * The Canvas2D adapter uses world-space (coordinate-math hit-detection).
- * The Pixi adapter uses stage-space (EventBoundary.hitTest internally applies
- * the inverse of the world container's transform).
+ * The Canvas2D adapter uses world-space (coordinate-math hit-detection); the
+ * stage-space arguments are kept on the interface for future renderer-agnostic adapters.
  */
 export interface HitTestAdapter {
   findAgentAt: (worldX: number, worldY: number, stageX: number, stageY: number) => string | null
@@ -68,9 +67,7 @@ interface InteractionOptions {
   doZoomToFit: () => void
   mainCanvasRef: MutableRefObject<HTMLElement | null>
   /** Optional renderer-specific hit-detection adapter. When omitted, the hook
-   *  falls back to the Canvas2D coordinate-math functions. The Pixi path
-   *  supplies an adapter that can use Pixi's event system or iterate
-   *  display-object containers. */
+   *  falls back to the Canvas2D coordinate-math functions. */
   hitTestAdapter?: HitTestAdapter
 }
 
@@ -99,7 +96,8 @@ export function useCanvasInteraction({
 
   // ─── Stage-space helper ──────────────────────────────────────────────────
   // Stage-space = pixel coords relative to the canvas element rect (before
-  // camera transform). Needed by the Pixi hit-test adapter.
+  // camera transform). Plumbed through the HitTestAdapter contract so a future
+  // non-Canvas2D adapter wouldn't have to recompute it from screen coords.
   const screenToStage = useCallback((screenX: number, screenY: number) => {
     const canvas = mainCanvasRef.current
     if (!canvas) return { x: 0, y: 0 }

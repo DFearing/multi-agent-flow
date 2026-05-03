@@ -175,7 +175,7 @@ function AgentVisualizerInner() {
 
   // Performance settings: persisted frame-rate cap + per-effect toggles.
   // The cap is pushed into the shared SimulationManager so the rAF loop
-  // throttles itself; effect toggles flow as props down to PixiCanvas.
+  // throttles itself; effect toggles flow as props down to AgentCanvas.
   const { frameCap, setFrameCap, effects, setEffect, bloomThrottle, setBloomThrottle } = usePerfSettings()
   useEffect(() => {
     manager.setFrameCap(frameCap)

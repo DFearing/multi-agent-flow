@@ -10,15 +10,12 @@ import { useSessionNames } from '@/hooks/use-session-names'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { colorForSession } from '@/lib/colors'
 import { AgentCanvas } from './canvas'
-import { PixiCanvas } from './pixi/pixi-canvas'
 import { ControlBar } from './control-bar'
 import { FloatingPanel } from './floating-panel'
 import { CanvasZoomControl } from './canvas-zoom-control'
 import { useSessionStatsDispatch, type SessionStats } from './session-stats-provider'
 import { TIMING, type SimulationEvent, type TimelineEvent } from '@/lib/agent-types'
 import type { EffectToggles } from '@/hooks/use-perf-settings'
-
-import { IS_PIXI_RENDERER as USE_PIXI_RENDERER } from '@/lib/renderer-mode'
 
 /** Stable empty-events sentinel — keeps the externalEvents prop reference
  *  identical across idle renders so useAgentSimulation's animate callback
@@ -274,52 +271,28 @@ function SessionCanvasPanelImpl({
     >
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: sessionColor.tint }}>
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-          {USE_PIXI_RENDERER ? (
-            <PixiCanvas
-              simulationRef={sim.frameRef}
-              sessionId={sessionId}
-              selectedAgentId={selectedAgentId}
-              hoveredAgentId={hoveredAgentId}
-              showStats={showStats}
-              showHexGrid={showHexGrid}
-              effects={effects}
-              zoomToFitTrigger={combinedZoomToFitTrigger}
-              pauseAutoFit={pauseAutoFit}
-              onAgentClick={(id) => onAgentClick(id, sessionId)}
-              onAgentHover={onAgentHover}
-              onAgentDrag={sim.updateAgentPosition}
-              onContextMenu={onContextMenu}
-              onToolCallClick={onToolCallClick}
-              selectedToolCallId={selectedToolCallId}
-              onDiscoveryClick={onDiscoveryClick}
-              selectedDiscoveryId={selectedDiscoveryId}
-              showCostOverlay={showCostOverlay}
-              minZoomLevel={minZoomLevel}
-            />
-          ) : (
-            <AgentCanvas
-              simulationRef={sim.frameRef}
-              sessionId={sessionId}
-              selectedAgentId={selectedAgentId}
-              hoveredAgentId={hoveredAgentId}
-              showStats={showStats}
-              showHexGrid={showHexGrid}
-              bloomEnabled={effects.bloom}
-              bloomThrottle={bloomThrottle}
-              zoomToFitTrigger={combinedZoomToFitTrigger}
-              pauseAutoFit={pauseAutoFit}
-              onAgentClick={(id) => onAgentClick(id, sessionId)}
-              onAgentHover={onAgentHover}
-              onAgentDrag={sim.updateAgentPosition}
-              onContextMenu={onContextMenu}
-              onToolCallClick={onToolCallClick}
-              selectedToolCallId={selectedToolCallId}
-              onDiscoveryClick={onDiscoveryClick}
-              selectedDiscoveryId={selectedDiscoveryId}
-              showCostOverlay={showCostOverlay}
-              minZoomLevel={minZoomLevel}
-            />
-          )}
+          <AgentCanvas
+            simulationRef={sim.frameRef}
+            sessionId={sessionId}
+            selectedAgentId={selectedAgentId}
+            hoveredAgentId={hoveredAgentId}
+            showStats={showStats}
+            showHexGrid={showHexGrid}
+            bloomEnabled={effects.bloom}
+            bloomThrottle={bloomThrottle}
+            zoomToFitTrigger={combinedZoomToFitTrigger}
+            pauseAutoFit={pauseAutoFit}
+            onAgentClick={(id) => onAgentClick(id, sessionId)}
+            onAgentHover={onAgentHover}
+            onAgentDrag={sim.updateAgentPosition}
+            onContextMenu={onContextMenu}
+            onToolCallClick={onToolCallClick}
+            selectedToolCallId={selectedToolCallId}
+            onDiscoveryClick={onDiscoveryClick}
+            selectedDiscoveryId={selectedDiscoveryId}
+            showCostOverlay={showCostOverlay}
+            minZoomLevel={minZoomLevel}
+          />
           <CanvasZoomControl value={minZoomLevel} onChange={setMinZoomLevel} />
         </div>
         <ControlBar

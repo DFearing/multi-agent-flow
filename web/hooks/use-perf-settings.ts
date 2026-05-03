@@ -31,23 +31,14 @@ export const BLOOM_THROTTLE_OPTIONS: ReadonlyArray<{ value: number; label: strin
 // effects after upgrading.
 export interface EffectToggles {
   bloom: boolean
-  particles: boolean
-  bubbles: boolean
-  backgroundParticles: boolean
 }
 
 const DEFAULT_EFFECTS: EffectToggles = {
   bloom: true,
-  particles: true,
-  bubbles: true,
-  backgroundParticles: true,
 }
 
 export const EFFECT_LABELS: Record<keyof EffectToggles, string> = {
   bloom: 'Bloom (post-processing glow)',
-  particles: 'Particle trails',
-  bubbles: 'Message bubbles',
-  backgroundParticles: 'Background depth particles',
 }
 
 export function usePerfSettings() {
