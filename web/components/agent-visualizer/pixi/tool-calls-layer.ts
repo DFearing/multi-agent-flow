@@ -40,6 +40,8 @@ interface ToolCallEntry {
   lastSecondaryText: string
   /** Last-rendered secondary color. */
   lastSecondaryColor: string
+  /** Cache key for the background Graphics commands. (IR-6) */
+  lastBgKey: string
   /** Tool call id. */
   toolCallId: string
 }
@@ -120,22 +122,32 @@ export class ToolCallsLayer {
       entry.container.visible = tool.opacity > 0.01
 
       // ── Background ─────────────────────────────────────────────────
-      entry.background.clear()
-      entry.background.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, TOOL_DRAW.borderRadius)
+      // IR-6: gate the Graphics rebuild on a key over every input that
+      // affects the rendered shape. `pulse` varies continuously, so we
+      // quantize it to 1/20 increments — the human eye can't distinguish
+      // sub-bucket differences and this collapses 60Hz fluctuation into
+      // ~5 distinct keys per second.
+      const pulseBucket = Math.round(pulse * 20)
+      const bgKey = `${cardW}|${cardH}|${tool.state}|${isSelected}|${isError}|${pulseBucket}`
+      if (bgKey !== entry.lastBgKey) {
+        entry.background.clear()
+        entry.background.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, TOOL_DRAW.borderRadius)
 
-      if (isError) {
-        entry.background.fill({ color: 0x280a0f, alpha: 0.8 * pulse })
-        entry.background.stroke({ width: 2, color: TINT_ERROR, alpha: 0.56 })
-      } else if (isSelected) {
-        entry.background.fill({ color: TINT_HOLO, alpha: 0.15 * pulse })
-        entry.background.stroke({ width: 1.5, color: TINT_HOLO, alpha: 0.67 })
-      } else {
-        entry.background.fill({ color: 0x0a0f1e, alpha: 0.7 * pulse })
-        entry.background.stroke({
-          width: 1,
-          color: isRunning ? TINT_TOOL : TINT_RETURN,
-          alpha: isRunning ? 0.375 : 0.25,
-        })
+        if (isError) {
+          entry.background.fill({ color: 0x280a0f, alpha: 0.8 * pulse })
+          entry.background.stroke({ width: 2, color: TINT_ERROR, alpha: 0.56 })
+        } else if (isSelected) {
+          entry.background.fill({ color: TINT_HOLO, alpha: 0.15 * pulse })
+          entry.background.stroke({ width: 1.5, color: TINT_HOLO, alpha: 0.67 })
+        } else {
+          entry.background.fill({ color: 0x0a0f1e, alpha: 0.7 * pulse })
+          entry.background.stroke({
+            width: 1,
+            color: isRunning ? TINT_TOOL : TINT_RETURN,
+            alpha: isRunning ? 0.375 : 0.25,
+          })
+        }
+        entry.lastBgKey = bgKey
       }
 
       // ── Selection tint ─────────────────────────────────────────────
@@ -213,10 +225,14 @@ export class ToolCallsLayer {
       }
     }
 
-    // Hide entries for tool calls that no longer exist
+    // Drop entries for tool calls that no longer exist this frame. The
+    // simulation already enforces fade timing (animate.ts evicts faded
+    // tool calls only after opacity reaches 0), so layers can mirror its
+    // decisions without a grace period.
     for (const [id, entry] of this.entries) {
       if (!aliveIds.has(id)) {
-        entry.container.visible = false
+        entry.container.destroy({ children: true })
+        this.entries.delete(id)
       }
     }
   }
@@ -272,6 +288,7 @@ export class ToolCallsLayer {
       lastLabelColor: '',
       lastSecondaryText: '',
       lastSecondaryColor: '',
+      lastBgKey: '',
       toolCallId,
     }
   }

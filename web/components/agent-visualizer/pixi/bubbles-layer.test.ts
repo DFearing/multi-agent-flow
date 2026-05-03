@@ -49,10 +49,16 @@ vi.mock('pixi.js', () => {
   class MockGraphics {
     label = ''
     visible = true
-    clear() { return this }
-    roundRect() { return this }
-    fill(_opts: unknown) { return this }
-    stroke(_opts: unknown) { return this }
+    // Per-instance counters added for IR-6 background-rebuild gating.
+    // Existing tests do not inspect these fields and are unaffected.
+    _clearCount = 0
+    _roundRectCount = 0
+    _fillCount = 0
+    _strokeCount = 0
+    clear() { this._clearCount++; return this }
+    roundRect() { this._roundRectCount++; return this }
+    fill(_opts: unknown) { this._fillCount++; return this }
+    stroke(_opts: unknown) { this._strokeCount++; return this }
     destroy() { /* no-op */ }
   }
 
@@ -221,5 +227,84 @@ describe('BubblesLayer', () => {
     layer.dispose()
     expect(layer.activeCount).toBe(0)
     expect(layer.freeCount).toBe(0)
+  })
+
+  // ─── IR-3: wrap-cache hit on stable bubble ───────────────────────────────
+  // The pre-fix renderer ran the full word-wrap loop every frame, even
+  // though the text and dimensions never changed. The post-fix path stores
+  // the wrapped lines on the MessageBubble itself (`_cachedWrappedLines`)
+  // and reuses the SAME ARRAY across frames whenever the wrap key matches.
+  //
+  // A regression that drops the cache, mis-keys it, or rebuilds the array
+  // every frame would fail the strict reference-equality check below.
+
+  it('IR-3: _cachedWrappedLines populates after first frame and is the same array across 10 frames', () => {
+    const layer = new BubblesLayer()
+    const longText = 'The quick brown fox jumps over the lazy dog. '.repeat(4).trim()
+    const bubble = makeBubble(0, longText)
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1', [bubble])],
+    ])
+
+    // Frame 1 — populate the cache.
+    layer.update(agents, 0.1)
+    const cachedAfterFrame1 = bubble._cachedWrappedLines
+    expect(cachedAfterFrame1).toBeDefined()
+    expect(cachedAfterFrame1!.length).toBeGreaterThan(0)
+    // The cache key uses a 'pixi:' prefix so it doesn't collide with the
+    // canvas2d path's font-string key.
+    expect(bubble._cachedWrappedFont).toMatch(/^pixi:/)
+
+    // Capture the full content snapshot to compare against later frames.
+    const linesSnapshot = [...cachedAfterFrame1!]
+
+    for (let frame = 2; frame <= 10; frame++) {
+      layer.update(agents, 0.1 + frame * 0.016)
+      // Reference equality: same array, not just same content.
+      expect(bubble._cachedWrappedLines).toBe(cachedAfterFrame1)
+    }
+
+    // Content sanity — neither length nor any line drifted across frames.
+    expect(bubble._cachedWrappedLines).toEqual(linesSnapshot)
+  })
+
+  // ─── IR-6: background-rebuild gating on stable bubble ────────────────────
+  // Bubbles don't pulse, so a stable bubble (constant text + role) should
+  // rebuild its background Graphics exactly once across many frames. Pre-fix
+  // every frame ran clear+roundRect+fill+stroke; post-fix gates on
+  // bgKey = `${bubbleW}|${bubbleH}|${role}` which is immutable for stable
+  // input.
+
+  it('IR-6: stable bubble rebuilds background exactly once across 30 frames', () => {
+    const layer = new BubblesLayer()
+    const bubble = makeBubble(0, 'Hello world from the bubble layer test', 'assistant')
+    const agents = new Map<string, Agent>([
+      ['a1', makeAgent('a1', [bubble])],
+    ])
+
+    // First update: spawn the entry.
+    layer.update(agents, 0.1)
+
+    // Reach into the layer to grab the active entry's background Graphics.
+    const pool = (layer as unknown as {
+      pool: { active: Map<string, { background: { _clearCount: number; _roundRectCount: number; _fillCount: number; _strokeCount: number } }> }
+    }).pool
+    expect(pool.active.size).toBe(1)
+    const entry = Array.from(pool.active.values())[0]
+    const bg = entry.background
+    const initialClears = bg._clearCount
+    const initialRoundRects = bg._roundRectCount
+    const initialFills = bg._fillCount
+    const initialStrokes = bg._strokeCount
+
+    // 30 stable frames — bgKey unchanged → no background rebuilds.
+    for (let frame = 1; frame <= 30; frame++) {
+      layer.update(agents, 0.1 + frame * 0.016)
+    }
+
+    expect(bg._clearCount - initialClears).toBe(0)
+    expect(bg._roundRectCount - initialRoundRects).toBe(0)
+    expect(bg._fillCount - initialFills).toBe(0)
+    expect(bg._strokeCount - initialStrokes).toBe(0)
   })
 })

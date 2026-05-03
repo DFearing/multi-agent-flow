@@ -31,6 +31,10 @@ interface DiscoveryEntry {
   lastLabelText: string
   lastLabelColor: string
   lastContentKey: string
+  /** Cache key for background + accent-bar Graphics commands. Both share
+   *  the same dependency set (cardW, cardH, typeColor, isSelected) so they
+   *  rebuild together. (IR-6) */
+  lastBgKey: string
   discoveryId: string
 }
 
@@ -41,6 +45,19 @@ function parseColor(hex: string): number {
   }
   return 0xffffff
 }
+
+/** Pre-parsed tint for connection lines — the same color string is used
+ *  for every discovery, so parsing once at module load is strictly cheaper
+ *  than parsing per-frame. */
+const HOLO_BASE_TINT = parseColor(COLORS.holoBase)
+
+/**
+ * Module-scope reusable bucket map for IR-5 alpha-bucketed connection-line
+ * drawing. Keyed by quantized alpha (Math.round(alpha * 20) / 20). Each value
+ * is a flat array of [ax, ay, dx, dy, …] coordinates. Reused across frames:
+ * we clear each value's length to 0 instead of allocating a fresh Map.
+ */
+const CONNECTION_BUCKETS = new Map<number, number[]>()
 
 /**
  * Manages the discovery rendering layer. Owns a Container that the caller
@@ -75,17 +92,38 @@ export class DiscoveriesLayer {
     const aliveIds = new Set<string>()
 
     // ── Connection lines ────────────────────────────────────────────────
+    // IR-5: bucket by quantized alpha so each unique alpha emits one
+    // moveTo+lineTo+stroke draw call instead of N. Discoveries' opacity is
+    // continuous, but quantizing the resulting alpha to 1/20 increments
+    // collapses ~all per-frame variation into a handful of buckets.
     this.connectionLines.clear()
+
+    // Reset existing bucket arrays in place (no Map allocation per frame).
+    for (const arr of CONNECTION_BUCKETS.values()) arr.length = 0
+
     for (const disc of discoveries) {
       const agent = agents.get(disc.agentId)
       if (!agent || disc.opacity < 0.1) continue
 
-      this.connectionLines.moveTo(agent.x, agent.y)
-      this.connectionLines.lineTo(disc.x, disc.y)
+      const alphaBucket = Math.round(disc.opacity * 0.09 * 20) / 20
+      let arr = CONNECTION_BUCKETS.get(alphaBucket)
+      if (!arr) {
+        arr = []
+        CONNECTION_BUCKETS.set(alphaBucket, arr)
+      }
+      arr.push(agent.x, agent.y, disc.x, disc.y)
+    }
+
+    for (const [alpha, coords] of CONNECTION_BUCKETS) {
+      if (coords.length === 0) continue
+      for (let i = 0; i < coords.length; i += 4) {
+        this.connectionLines.moveTo(coords[i], coords[i + 1])
+        this.connectionLines.lineTo(coords[i + 2], coords[i + 3])
+      }
       this.connectionLines.stroke({
         width: 0.5,
-        color: parseColor(COLORS.holoBase),
-        alpha: disc.opacity * 0.09,
+        color: HOLO_BASE_TINT,
+        alpha,
       })
     }
 
@@ -113,21 +151,28 @@ export class DiscoveriesLayer {
       entry.container.alpha = disc.opacity
       entry.container.visible = disc.opacity > 0.01
 
-      // ── Background ────────────────────────────────────────────────
-      entry.background.clear()
-      entry.background.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 3)
-      entry.background.fill({
-        color: isSelected ? parseColor('#0a0f1e') : parseColor('#0a0f1e'),
-        alpha: isSelected ? 0.8 : 0.6,
-      })
-      if (!isSelected) {
-        entry.background.stroke({ width: 0.5, color: typeTint, alpha: 0.19 })
-      }
+      // ── Background + accent bar ──────────────────────────────────
+      // IR-6: gate the Graphics rebuild on a key over every input that
+      // affects the rendered shape. Discoveries don't pulse, so the key
+      // is just the geometry + state inputs.
+      const bgKey = `${cardW}|${cardH}|${typeColor}|${isSelected}`
+      if (bgKey !== entry.lastBgKey) {
+        entry.background.clear()
+        entry.background.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 3)
+        entry.background.fill({
+          color: parseColor('#0a0f1e'),
+          alpha: isSelected ? 0.8 : 0.6,
+        })
+        if (!isSelected) {
+          entry.background.stroke({ width: 0.5, color: typeTint, alpha: 0.19 })
+        }
 
-      // ── Accent bar ────────────────────────────────────────────────
-      entry.accentBar.clear()
-      entry.accentBar.rect(-cardW / 2, -cardH / 2, 2, cardH)
-      entry.accentBar.fill({ color: typeTint, alpha: 0.375 })
+        entry.accentBar.clear()
+        entry.accentBar.rect(-cardW / 2, -cardH / 2, 2, cardH)
+        entry.accentBar.fill({ color: typeTint, alpha: 0.375 })
+
+        entry.lastBgKey = bgKey
+      }
 
       // ── Selection glow ────────────────────────────────────────────
       entry.selectionGlow.visible = isSelected
@@ -191,10 +236,14 @@ export class DiscoveriesLayer {
       }
     }
 
-    // Hide entries for discoveries that no longer exist
+    // Drop entries for discoveries that no longer exist this frame.
+    // Discoveries with opacity < 0.05 are skipped earlier in the loop, so
+    // they fall out of aliveIds and get destroyed here. Previously entries
+    // were merely hidden, leaking GPU buffers across long sessions.
     for (const [id, entry] of this.entries) {
       if (!aliveIds.has(id)) {
-        entry.container.visible = false
+        entry.container.destroy({ children: true })
+        this.entries.delete(id)
       }
     }
   }
@@ -252,6 +301,7 @@ export class DiscoveriesLayer {
       lastLabelText: '',
       lastLabelColor: '',
       lastContentKey: '',
+      lastBgKey: '',
       discoveryId,
     }
   }

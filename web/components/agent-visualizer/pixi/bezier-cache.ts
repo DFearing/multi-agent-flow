@@ -159,10 +159,12 @@ export class BezierCache {
 }
 
 /** Interpolate a position along the precomputed polyline at parameter t (0..1).
- *  Returns the interpolated {x, y, nx, ny} by lerping between the two nearest
- *  samples. Cheaper than evaluating the cubic polynomial. */
+ *  Mutates and returns `out` with the interpolated {x, y, nx, ny} by lerping
+ *  between the two nearest samples. Cheaper than evaluating the cubic
+ *  polynomial. The out-parameter form lets the hot path (particles-layer)
+ *  reuse a single scratch object across thousands of calls per frame. */
 export function samplePolyline(
-  polyline: CachedPolyline, t: number,
+  polyline: CachedPolyline, t: number, out: BezierSample,
 ): BezierSample {
   const n = polyline.samples.length - 1
   const idx = t * n
@@ -171,10 +173,22 @@ export function samplePolyline(
   const frac = idx - i0
   const a = polyline.samples[i0]
   const b = polyline.samples[i1]
-  return {
-    x: a.x + (b.x - a.x) * frac,
-    y: a.y + (b.y - a.y) * frac,
-    nx: a.nx + (b.nx - a.nx) * frac,
-    ny: a.ny + (b.ny - a.ny) * frac,
-  }
+  out.x = a.x + (b.x - a.x) * frac
+  out.y = a.y + (b.y - a.y) * frac
+  out.nx = a.nx + (b.nx - a.nx) * frac
+  out.ny = a.ny + (b.ny - a.ny) * frac
+  return out
+}
+
+/**
+ * Module-level singleton shared by EdgesLayer and ParticlesLayer. Both layers
+ * compute polyline samples for the same edges; sharing the cache avoids
+ * redundant bezier evaluation each frame and keeps a single source of truth
+ * for invalidation timing.
+ */
+export const sharedBezierCache = new BezierCache()
+
+/** Test helper — clears the shared cache between test runs. */
+export function resetSharedBezierCache(): void {
+  sharedBezierCache.clear()
 }

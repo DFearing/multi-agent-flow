@@ -37,16 +37,31 @@ interface AgentEntry {
   hoverHalo: Graphics
   /** Name label sprite (from glyph atlas). */
   labelSprite: Sprite | null
-  /** Stats overlay sprite (from glyph atlas). */
-  statsSprite: Sprite | null
+  /** Stable label portion of the stats overlay (e.g. "3 tools · ").
+   *  Re-rendered only when `agent.toolCalls` changes — once per tool call,
+   *  not once per frame. */
+  statsLabelSprite: Sprite | null
+  /** Volatile value portion of the stats overlay (e.g. "12s").
+   *  Re-rendered only when `Math.floor(agent.timeAlive)` changes — at most
+   *  1Hz, instead of the previous toFixed(1) churn at frame rate. */
+  statsValueSprite: Sprite | null
+  /** Cached width of the label sprite's glyph (used to position the value
+   *  sprite to its right). Updated whenever the label re-renders. */
+  statsLabelW: number
+  /** Cached width of the value sprite's glyph. */
+  statsValueW: number
   /** Active pulse ring (for thinking state animation). */
   pulseRing: Graphics
   /** Last-rendered label text (to detect changes). */
   lastLabelText: string
   /** Last-rendered label color. */
   lastLabelColor: string
-  /** Last-rendered stats text. */
-  lastStatsText: string
+  /** Last-rendered tool-call count for the stats label sprite. -1 sentinel
+   *  forces re-render on first sight (since 0 is a valid agent.toolCalls). */
+  lastStatsLabelCount: number
+  /** Last-rendered integer second for the stats value sprite. -1 sentinel
+   *  forces re-render on first sight. */
+  lastStatsValueSec: number
   /** Agent id. */
   agentId: string
 }
@@ -174,34 +189,76 @@ export class AgentsLayer {
       }
 
       // ── Stats overlay ──────────────────────────────────────────────
+      // CR-2: split the previous "${toolCalls} tools · ${timeAlive.toFixed(1)}s"
+      // glyph into a stable label part and a 1Hz-quantized value part. The
+      // old string changed every frame (toFixed(1) ticks ~60Hz), pumping a
+      // unique entry into the glyph atlas each frame and churning the LRU.
       if (showStats && agent.state !== 'complete') {
-        const statsText = `${agent.toolCalls} tools · ${agent.timeAlive.toFixed(1)}s`
-        if (statsText !== entry.lastStatsText) {
-          if (entry.statsSprite) {
-            entry.container.removeChild(entry.statsSprite)
-            entry.statsSprite.destroy()
+        // Label re-renders only on tool-call count change.
+        if (agent.toolCalls !== entry.lastStatsLabelCount) {
+          if (entry.statsLabelSprite) {
+            entry.container.removeChild(entry.statsLabelSprite)
+            entry.statsLabelSprite.destroy()
           }
-          const glyph = this.glyphAtlas.getGlyph(statsText, '#66ccff90', STATS_OVERLAY.fontSize)
-          const sprite = new Sprite(glyph.texture)
-          sprite.anchor.set(0.5, 1)
-          sprite.label = 'stats'
+          const labelText = `${agent.toolCalls} tools · `
+          const labelGlyph = this.glyphAtlas.getGlyph(labelText, '#66ccff90', STATS_OVERLAY.fontSize)
+          const sprite = new Sprite(labelGlyph.texture)
+          sprite.anchor.set(0, 1)
+          sprite.label = 'stats-label'
           entry.container.addChild(sprite)
-          entry.statsSprite = sprite
-          entry.lastStatsText = statsText
+          entry.statsLabelSprite = sprite
+          entry.statsLabelW = labelGlyph.width
+          entry.lastStatsLabelCount = agent.toolCalls
         }
-        if (entry.statsSprite) {
-          entry.statsSprite.y = -(radius + STATS_OVERLAY.yOffset)
-          entry.statsSprite.visible = true
+
+        // Value re-renders only when the integer second changes.
+        const seconds = Math.floor(agent.timeAlive)
+        if (seconds !== entry.lastStatsValueSec) {
+          if (entry.statsValueSprite) {
+            entry.container.removeChild(entry.statsValueSprite)
+            entry.statsValueSprite.destroy()
+          }
+          const valueText = `${seconds}s`
+          const valueGlyph = this.glyphAtlas.getGlyph(valueText, '#66ccff90', STATS_OVERLAY.fontSize)
+          const sprite = new Sprite(valueGlyph.texture)
+          sprite.anchor.set(0, 1)
+          sprite.label = 'stats-value'
+          entry.container.addChild(sprite)
+          entry.statsValueSprite = sprite
+          entry.statsValueW = valueGlyph.width
+          entry.lastStatsValueSec = seconds
         }
-      } else if (entry.statsSprite) {
-        entry.statsSprite.visible = false
+
+        // Position both sprites so the combined glyph row is centered
+        // horizontally above the agent. Recomputed every frame because
+        // either width may have changed; both are O(1) numeric writes.
+        const totalW = entry.statsLabelW + entry.statsValueW
+        const baseY = -(radius + STATS_OVERLAY.yOffset)
+        if (entry.statsLabelSprite) {
+          entry.statsLabelSprite.x = -totalW / 2
+          entry.statsLabelSprite.y = baseY
+          entry.statsLabelSprite.visible = true
+        }
+        if (entry.statsValueSprite) {
+          entry.statsValueSprite.x = -totalW / 2 + entry.statsLabelW
+          entry.statsValueSprite.y = baseY
+          entry.statsValueSprite.visible = true
+        }
+      } else {
+        if (entry.statsLabelSprite) entry.statsLabelSprite.visible = false
+        if (entry.statsValueSprite) entry.statsValueSprite.visible = false
       }
     }
 
-    // Hide entries for agents that no longer exist
+    // Drop entries for agents that no longer exist this frame. The
+    // simulation already enforces fade timing (animate.ts evicts faded
+    // sub-agents only after opacity reaches 0), so layers can mirror its
+    // decisions without a grace period. Previously entries were merely
+    // hidden, accumulating monotonically over long sessions.
     for (const [id, entry] of this.entries) {
       if (!aliveIds.has(id)) {
-        entry.container.visible = false
+        entry.container.destroy({ children: true })
+        this.entries.delete(id)
       }
     }
   }
@@ -265,11 +322,15 @@ export class AgentsLayer {
       selectionRing,
       hoverHalo,
       labelSprite: null,
-      statsSprite: null,
+      statsLabelSprite: null,
+      statsValueSprite: null,
+      statsLabelW: 0,
+      statsValueW: 0,
       pulseRing,
       lastLabelText: '',
       lastLabelColor: '',
-      lastStatsText: '',
+      lastStatsLabelCount: -1,
+      lastStatsValueSec: -1,
       agentId,
     }
   }
