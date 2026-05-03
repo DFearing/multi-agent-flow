@@ -82,10 +82,11 @@ export class ParticlesLayer {
     const edgeMap = new Map<string, Edge>()
     for (const e of edges) edgeMap.set(e.id, e)
 
-    // Prune bezier cache of edges that no longer exist
-    const activeEdgeIds = new Set<string>()
-    for (const p of particles) activeEdgeIds.add(p.edgeId)
-    sharedBezierCache.prune(activeEdgeIds)
+    // Bezier-cache pruning is owned exclusively by EdgesLayer, which sees the
+    // full set of alive edges every frame. Pruning here would evict polylines
+    // for idle edges (those without active particles) that EdgesLayer just
+    // populated, undoing the IR-1 caching win. ParticlesLayer is a pure
+    // consumer — it only `get()`s.
 
     for (const particle of particles) {
       const edge = edgeMap.get(particle.edgeId)

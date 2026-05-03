@@ -118,9 +118,13 @@ function buildStripGeometry(sampleCount: number): MeshGeometry {
   })
 }
 
-/** Destroy a mesh entry's GPU resources. The geometry is per-edge so we own
- *  it and free its buffers; the texture is module-shared so we never free it. */
-function destroyEntryMesh(entry: EdgeEntry): void {
+/** Canonical disposal path for an edge mesh entry. Removes from the parent
+ *  container BEFORE destroying — Pixi convention is remove-then-destroy so
+ *  the parent's child list never holds a reference to a destroyed object.
+ *  Geometry is per-edge so we own it and free its buffers; the texture is
+ *  module-shared so we never free it. */
+function destroyEntryMesh(parent: Container, entry: EdgeEntry): void {
+  parent.removeChild(entry.mesh)
   // Geometry first — destroyBuffers=true releases the underlying GPU buffers.
   // Mesh.destroy() does not cascade into geometry, so this must be explicit.
   entry.mesh.geometry.destroy(true)
@@ -201,8 +205,7 @@ export class EdgesLayer {
       // (edge.type doesn't change in practice, but guard anyway).
       if (!entry || entry.sampleCount !== sampleCount || entry.beamWidth !== beamWidth) {
         if (entry) {
-          destroyEntryMesh(entry)
-          this.container.removeChild(entry.mesh)
+          destroyEntryMesh(this.container, entry)
         }
         const geometry = buildStripGeometry(sampleCount)
         const mesh = new Mesh<MeshGeometry>({
@@ -247,8 +250,7 @@ export class EdgesLayer {
     // (the previous "hide" behaviour) leaked GPU buffers across long sessions.
     for (const [id, entry] of this.entries) {
       if (!aliveIds.has(id)) {
-        destroyEntryMesh(entry)
-        this.container.removeChild(entry.mesh)
+        destroyEntryMesh(this.container, entry)
         this.entries.delete(id)
       }
     }
@@ -264,11 +266,15 @@ export class EdgesLayer {
    *  may still depend on it, and the singleton survives mount/remount cycles. */
   dispose(): void {
     for (const entry of this.entries.values()) {
-      // Geometry is per-edge so we own it; texture is shared so we don't.
-      destroyEntryMesh(entry)
+      // Each entry is removed from the container and destroyed (geometry +
+      // mesh). After this loop the container is empty, so destroying it does
+      // not need to cascade into children — `destroy({children:true})` would
+      // otherwise re-destroy the same meshes (currently safe only because
+      // Pixi v8 destroy() is idempotent — fragile to rely on).
+      destroyEntryMesh(this.container, entry)
     }
     this.entries.clear()
-    this.container.destroy({ children: true })
+    this.container.destroy()
   }
 
   /** Number of active edge entries — useful for tests. */

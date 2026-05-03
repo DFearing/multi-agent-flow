@@ -248,11 +248,13 @@ export function PixiCanvas({
 
   // ─── Draw callback (registered with shared render loop) ─────────────
   // IR-15: Every dynamic value flows through drawPropsRef so this closure
-  // has zero React-prop captures. Wrapping in useCallback with empty deps
-  // means the function identity stays stable for the component's lifetime,
-  // which lets the registerRender effect skip re-registering on each parent
-  // render. The eslint-disable is intentional — we are deliberately reading
-  // refs and stable handles inside a deps:[] callback.
+  // has zero React-prop captures. Wrapping in useCallback with deps that
+  // are all lifetime-stable refs (viewportId from useId, simulationRef from
+  // useRef) means the function identity stays stable for the component's
+  // lifetime, which lets the registerRender effect skip re-registering on
+  // each parent render. The eslint-disable is intentional — we are
+  // deliberately reading refs and stable handles inside the callback
+  // without listing them as deps.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const pixiDraw = useCallback((timestamp: number) => {
     if (!readyRef.current) return
