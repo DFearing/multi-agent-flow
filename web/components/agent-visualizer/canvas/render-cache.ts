@@ -136,6 +136,14 @@ const TEXT_SPRITE_MAX = 256
 const TEXT_SPRITE_EVICT_BATCH = 32
 let textSpriteAccessCounter = 0
 
+/** Oversample factor beyond DPR. Sprites are rasterized at `dpr × OVERSAMPLE`
+ *  and drawn at logical size — Canvas2D bilinearly downsamples the high-res
+ *  glyphs, which stays sharp. Without this, drawing a sprite into the
+ *  camera-scaled world space upscales it (camera.scale > 1) and blurs the
+ *  text. With OVERSAMPLE = 4, glyphs stay sharp up to camera.scale ≈ 4.
+ *  Memory cost: each sprite canvas is OVERSAMPLE² × larger. */
+const TEXT_SPRITE_OVERSAMPLE = 4
+
 /**
  * Get a cached off-screen canvas containing pre-rendered text.
  *
@@ -190,12 +198,15 @@ export function getTextSprite(
   const logicalW = Math.ceil(metrics.width) + 2 // 1px padding each side
   const logicalH = Math.ceil(fontSize * 1.5) + 2
 
-  // Create the sprite canvas at DPR resolution
+  // Create the sprite canvas at DPR × OVERSAMPLE resolution. The extra factor
+  // gives bilinear downsampling headroom when the sprite is drawn into a
+  // camera-scaled world context (otherwise zoom > 1 upscales and blurs).
+  const renderScale = dpr * TEXT_SPRITE_OVERSAMPLE
   const canvas = document.createElement('canvas')
-  canvas.width = Math.ceil(logicalW * dpr)
-  canvas.height = Math.ceil(logicalH * dpr)
+  canvas.width = Math.ceil(logicalW * renderScale)
+  canvas.height = Math.ceil(logicalH * renderScale)
   const ctx = canvas.getContext('2d')!
-  ctx.scale(dpr, dpr)
+  ctx.scale(renderScale, renderScale)
 
   ctx.font = font
   ctx.fillStyle = color

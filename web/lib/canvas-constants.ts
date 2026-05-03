@@ -367,11 +367,28 @@ export const PERF_OVERLAY_ENABLED = typeof window !== 'undefined'
     return p.has('perf') || p.has('stress')
   })()
 
+/** Per-frame draw-work multiplier for stress testing. With `?stress=N` the
+ *  world-render block runs N times per frame (clear stays once). On a
+ *  vsync-capped display (e.g. 144 Hz), perf changes are invisible at 1× —
+ *  the frame budget is so generous that even a 30% scripting-time win still
+ *  reads as 144 FPS. Multiplying the work pushes the loop past the cap so
+ *  improvements show up as visible FPS changes. Clamped to [1, 64]. */
+export const PERF_STRESS_MULTIPLIER = typeof window !== 'undefined'
+  ? (() => {
+    const v = new URLSearchParams(window.location.search).get('stress')
+    if (v == null) return 1
+    const n = parseInt(v, 10)
+    if (!Number.isFinite(n) || n < 1) return 1
+    return n > 64 ? 64 : n
+  })()
+  : 1
+
 export const PERF_OVERLAY = {
   x: 8,
   y: 8,
   width: 260,
-  height: 140,
+  /** Tall enough for the existing rows plus the Headroom line. */
+  height: 158,
   padding: 8,
   lineHeight: 18,
   font: '12px monospace',
