@@ -14,7 +14,8 @@ import { BEAM, FX } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { PARTICLE_DRAW } from '@/lib/canvas-constants'
 import { getGlowTexture, getCircleTexture } from './pixi-app'
-import { BezierCache, samplePolyline } from './bezier-cache'
+import type { BezierSample } from './bezier-cache'
+import { sharedBezierCache, samplePolyline } from './bezier-cache'
 
 /** Pool of sprites to avoid allocation churn. Each frame we show/hide as needed. */
 interface SpriteEntry {
@@ -31,17 +32,19 @@ export class ParticlesLayer {
   readonly container: Container
   private pool: SpriteEntry[] = []
   private poolIndex = 0
-  private readonly bezierCache: BezierCache
   private readonly circleTexture: Texture
   private readonly glowRadius = PARTICLE_DRAW.glowRadius
 
   /** Color object reused every frame to avoid allocation. */
   private readonly tmpColor = new Color()
 
+  /** Scratch BezierSample reused across all samplePolyline() calls each
+   *  frame. Each call's result is read before the next call overwrites it. */
+  private readonly tmpSample: BezierSample = { x: 0, y: 0, nx: 0, ny: 0 }
+
   constructor() {
     this.container = new Container()
     this.container.label = 'particles'
-    this.bezierCache = new BezierCache()
     // Pre-create a circle texture at a reasonable base size.
     // Sprites scale from this.
     this.circleTexture = getCircleTexture(8)
@@ -68,13 +71,13 @@ export class ParticlesLayer {
     // Prune bezier cache of edges that no longer exist
     const activeEdgeIds = new Set<string>()
     for (const p of particles) activeEdgeIds.add(p.edgeId)
-    this.bezierCache.prune(activeEdgeIds)
+    sharedBezierCache.prune(activeEdgeIds)
 
     for (const particle of particles) {
       const edge = edgeMap.get(particle.edgeId)
       if (!edge) continue
 
-      const polyline = this.bezierCache.get(edge, agents, toolCalls)
+      const polyline = sharedBezierCache.get(edge, agents, toolCalls)
       if (!polyline) continue
 
       const t = particle.progress
@@ -86,7 +89,7 @@ export class ParticlesLayer {
       // Current position (with wobble)
       const wobbleAmt = Math.sin(t * BEAM.wobble.freq + time * BEAM.wobble.timeFreq + phase) *
         BEAM.wobble.amp * Math.sin(t * Math.PI)
-      const baseSample = samplePolyline(polyline, t)
+      const baseSample = samplePolyline(polyline, t, this.tmpSample)
       const px = baseSample.x + baseSample.nx * wobbleAmt
       const py = baseSample.y + baseSample.ny * wobbleAmt
 
@@ -98,7 +101,7 @@ export class ParticlesLayer {
           : Math.max(0, t - offset)
         const wob = Math.sin(tt * BEAM.wobble.freq + time * BEAM.wobble.timeFreq + phase) *
           BEAM.wobble.amp * Math.sin(tt * Math.PI)
-        const sample = samplePolyline(polyline, tt)
+        const sample = samplePolyline(polyline, tt, this.tmpSample)
         const tx = sample.x + sample.nx * wob
         const ty = sample.y + sample.ny * wob
 
@@ -152,9 +155,10 @@ export class ParticlesLayer {
     this.hideUnused()
   }
 
-  /** Release GPU resources. */
+  /** Release GPU resources.
+   *  The shared bezier cache is intentionally NOT cleared here — edges-layer
+   *  may still depend on it, and the singleton survives mount/remount cycles. */
   destroy(): void {
-    this.bezierCache.clear()
     for (const entry of this.pool) {
       entry.sprite.destroy()
     }

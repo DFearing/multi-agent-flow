@@ -16,7 +16,7 @@ import { BEAM, ANIM } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { getActiveEdgeIds } from '../canvas/draw-edges'
-import { BezierCache } from './bezier-cache'
+import { sharedBezierCache } from './bezier-cache'
 
 /** Persistent state for a single edge rope. */
 interface EdgeEntry {
@@ -68,10 +68,6 @@ export class EdgesLayer {
   /** Persistent rope entries keyed by edge id. */
   private entries = new Map<string, EdgeEntry>()
 
-  /** Shared bezier cache (same instance the particles layer would use,
-   *  but edges-layer owns its own to avoid coupling). */
-  private readonly bezierCache: BezierCache
-
   /** Tint values for tool vs parent-child edges, precomputed once. */
   private readonly toolTint: number
   private readonly parentChildTint: number
@@ -79,7 +75,6 @@ export class EdgesLayer {
   constructor() {
     this.container = new Container()
     this.container.label = 'edges'
-    this.bezierCache = new BezierCache()
     this.toolTint = parseHexColor(COLORS.tool)
     this.parentChildTint = parseHexColor(COLORS.holoBase)
   }
@@ -114,7 +109,7 @@ export class EdgesLayer {
           : null
       if (!target) continue
 
-      const polyline = this.bezierCache.get(edge, agents, toolCalls)
+      const polyline = sharedBezierCache.get(edge, agents, toolCalls)
       if (!polyline) continue
 
       aliveIds.add(edge.id)
@@ -187,12 +182,13 @@ export class EdgesLayer {
     // Prune bezier cache entries for edges that no longer exist in the
     // simulation. Use aliveIds (edges that resolved to valid endpoints
     // this frame) rather than all edge ids, mirroring particles-layer.
-    this.bezierCache.prune(aliveIds)
+    sharedBezierCache.prune(aliveIds)
   }
 
-  /** Release GPU resources and remove all display objects. */
+  /** Release GPU resources and remove all display objects.
+   *  The shared bezier cache is intentionally NOT cleared here — particles-layer
+   *  may still depend on it, and the singleton survives mount/remount cycles. */
   dispose(): void {
-    this.bezierCache.clear()
     for (const entry of this.entries.values()) {
       entry.rope.destroy()
     }

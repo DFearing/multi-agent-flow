@@ -64,13 +64,25 @@ const { mockBezierCacheGet, mockBezierCachePrune, mockBezierCacheClear } = vi.ho
   mockBezierCacheClear: vi.fn(),
 }))
 
-vi.mock('./bezier-cache', () => ({
-  BezierCache: class {
-    get = mockBezierCacheGet
-    prune = mockBezierCachePrune
-    clear = mockBezierCacheClear
-  },
-}))
+vi.mock('./bezier-cache', () => {
+  // Singleton instance shared by edges-layer and particles-layer in production.
+  // The test exposes the same handle so assertions can verify shared usage.
+  const sharedBezierCache = {
+    get: mockBezierCacheGet,
+    prune: mockBezierCachePrune,
+    clear: mockBezierCacheClear,
+  }
+  return {
+    BezierCache: class {
+      get = mockBezierCacheGet
+      prune = mockBezierCachePrune
+      clear = mockBezierCacheClear
+    },
+    sharedBezierCache,
+    resetSharedBezierCache: () => mockBezierCacheClear(),
+    samplePolyline: (_polyline: unknown, _t: number, out: { x: number; y: number; nx: number; ny: number }) => out,
+  }
+})
 
 // ─── Mock canvas/draw-edges ────────────────────────────────────────────────
 
