@@ -45,8 +45,13 @@ export function drawCostLabels(
     const r = agent.isMain ? NODE.radiusMain : NODE.radiusSub
     const pillY = agent.y - r - COST_DRAW.pillYOffset
 
-    // Floating cost pill
-    const label = `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
+    // Floating cost pill — quantize to $0.01 (or $0.001 below $0.01) so the
+    // overlay cache only invalidates when the visible label changes at that
+    // granularity, instead of on every sub-cent token increment.
+    const quantizedCost = cost < 0.01
+      ? Math.floor(cost * 1000) / 1000   // $0.001 steps
+      : Math.floor(cost * 100) / 100     // $0.01 steps
+    const label = `$${quantizedCost < 0.01 ? quantizedCost.toFixed(3) : quantizedCost.toFixed(2)}`
     ctx.font = 'bold 9px monospace'
     const labelW = measureTextCached(ctx, label)
     const pillW = labelW + COST_DRAW.pillPadding
@@ -61,9 +66,10 @@ export function drawCostLabels(
         const tokens = tc.tokenCost || 0
         byType.set(tc.toolName, (byType.get(tc.toolName) || 0) + tokens)
       }
-      // Quantize to nearest 100 tokens to reduce invalidation frequency
+      // Quantize to nearest 1000 tokens — the mini bar segments are too small
+      // to show sub-1k differences, so this avoids per-frame cache misses.
       toolHash = Array.from(byType.entries())
-        .map(([n, t]) => `${n}:${Math.round(t / 100)}`)
+        .map(([n, t]) => `${n}:${Math.round(t / 1000)}`)
         .join(',')
     }
     const dataHash = `cost|${label}|${toolHash}`

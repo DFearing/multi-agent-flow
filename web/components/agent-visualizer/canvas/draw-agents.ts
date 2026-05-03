@@ -320,9 +320,12 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
   const overlayW = STATS_OVERLAY.boxWidth
   const overlayH = STATS_OVERLAY.boxHeight
 
-  // Cache key: quantize timeAlive to 0.1s to avoid per-frame invalidation
-  const timeStr = agent.timeAlive.toFixed(1)
-  const dataHash = `stats|${agent.toolCalls}|${timeStr}`
+  // Cache key: quantize timeAlive to integer seconds so the cache only
+  // invalidates ~once per second instead of every frame.  The displayed text
+  // uses the same quantized value, keeping cache content pixel-faithful.
+  const timeSec = Math.floor(agent.timeAlive)
+  const statsText = `${agent.toolCalls} tools \u00B7 ${timeSec}s`
+  const dataHash = `stats|${statsText}`
 
   const sprite = getOverlaySprite(
     overlayKey('stats', agent.id), dataHash, overlayW, overlayH, undefined,
@@ -338,10 +341,7 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
       offCtx.font = `${STATS_OVERLAY.fontSize}px monospace`
       offCtx.textAlign = 'center'
       offCtx.textBaseline = 'top'
-      offCtx.fillText(
-        `${agent.toolCalls} tools \u00B7 ${timeStr}s`,
-        overlayW / 2, STATS_OVERLAY.textPaddingY,
-      )
+      offCtx.fillText(statsText, overlayW / 2, STATS_OVERLAY.textPaddingY)
     },
   )
 
