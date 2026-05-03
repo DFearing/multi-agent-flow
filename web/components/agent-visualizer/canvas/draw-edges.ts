@@ -35,25 +35,15 @@ export function computeControlPoints(fromX: number, fromY: number, toX: number, 
   }
 }
 
-/** Compute bezier position and perpendicular normal at parameter t */
-function bezierNormalAt(
-  t: number,
-  fromX: number, fromY: number,
-  cp1x: number, cp1y: number,
-  cp2x: number, cp2y: number,
-  toX: number, toY: number,
-  halfW: number,
-) {
-  const x = bezierPoint(t, fromX, cp1x, cp2x, toX)
-  const y = bezierPoint(t, fromY, cp1y, cp2y, toY)
-  const dt = 0.001
-  const t0 = Math.max(0, t - dt)
-  const t1 = Math.min(1, t + dt)
-  const tx = bezierPoint(t1, fromX, cp1x, cp2x, toX) - bezierPoint(t0, fromX, cp1x, cp2x, toX)
-  const ty = bezierPoint(t1, fromY, cp1y, cp2y, toY) - bezierPoint(t0, fromY, cp1y, cp2y, toY)
-  const len = Math.sqrt(tx * tx + ty * ty) || 1
-  return { x, y, nx: (-ty / len) * halfW, ny: (tx / len) * halfW }
-}
+// Scratch buffers reused across every drawTaperedBezier call to avoid
+// allocating BEAM.segments+1 sample objects per edge per frame.
+// Sized once and never reallocated; the same Float32Array is overwritten
+// on each invocation. Single-threaded rendering makes this safe.
+const SAMPLE_CAP = BEAM.segments + 1
+const sampleX = new Float32Array(SAMPLE_CAP)
+const sampleY = new Float32Array(SAMPLE_CAP)
+const sampleNx = new Float32Array(SAMPLE_CAP)
+const sampleNy = new Float32Array(SAMPLE_CAP)
 
 export function drawTaperedBezier(
   ctx: CanvasRenderingContext2D,
@@ -65,28 +55,33 @@ export function drawTaperedBezier(
   color: string, alpha: number,
 ) {
   const steps = BEAM.segments
+  const dt = 0.001
 
-  // Build outline points along both sides of the tapered curve
-  // then fill as a single polygon (1 draw call instead of N strokes)
-  ctx.beginPath()
-
-  // Forward pass: left side
+  // Sample the curve once into reusable scratch buffers, then walk the
+  // buffers twice (forward = left edge, reverse = right edge) to build
+  // the tapered outline polygon.
   for (let i = 0; i <= steps; i++) {
     const t = i / steps
     const halfW = (startWidth + (endWidth - startWidth) * t) / 2
-    const p = bezierNormalAt(t, fromX, fromY, cp1x, cp1y, cp2x, cp2y, toX, toY, halfW)
-    if (i === 0) ctx.moveTo(p.x + p.nx, p.y + p.ny)
-    else ctx.lineTo(p.x + p.nx, p.y + p.ny)
+    const t0 = t - dt < 0 ? 0 : t - dt
+    const t1 = t + dt > 1 ? 1 : t + dt
+    const tx = bezierPoint(t1, fromX, cp1x, cp2x, toX) - bezierPoint(t0, fromX, cp1x, cp2x, toX)
+    const ty = bezierPoint(t1, fromY, cp1y, cp2y, toY) - bezierPoint(t0, fromY, cp1y, cp2y, toY)
+    const len = Math.sqrt(tx * tx + ty * ty) || 1
+    sampleX[i] = bezierPoint(t, fromX, cp1x, cp2x, toX)
+    sampleY[i] = bezierPoint(t, fromY, cp1y, cp2y, toY)
+    sampleNx[i] = (-ty / len) * halfW
+    sampleNy[i] = (tx / len) * halfW
   }
 
-  // Reverse pass: right side
+  ctx.beginPath()
+  ctx.moveTo(sampleX[0] + sampleNx[0], sampleY[0] + sampleNy[0])
+  for (let i = 1; i <= steps; i++) {
+    ctx.lineTo(sampleX[i] + sampleNx[i], sampleY[i] + sampleNy[i])
+  }
   for (let i = steps; i >= 0; i--) {
-    const t = i / steps
-    const halfW = (startWidth + (endWidth - startWidth) * t) / 2
-    const p = bezierNormalAt(t, fromX, fromY, cp1x, cp1y, cp2x, cp2y, toX, toY, halfW)
-    ctx.lineTo(p.x - p.nx, p.y - p.ny)
+    ctx.lineTo(sampleX[i] - sampleNx[i], sampleY[i] - sampleNy[i])
   }
-
   ctx.closePath()
   ctx.fillStyle = color + alphaHex(alpha)
   ctx.fill()

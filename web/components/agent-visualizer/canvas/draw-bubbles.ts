@@ -48,7 +48,14 @@ export function drawMessageBubblesWorld(
       const truncated = allLines.length > BUBBLE_MAX_LINES
       const lines = truncated ? allLines.slice(0, BUBBLE_MAX_LINES) : allLines
 
-      const bubbleW = Math.min(BUBBLE_MAX_W, Math.max(...lines.map(l => measureTextCached(ctx, l))) + style.padding * 2 + 4)
+      // Running max over a single pass — avoids both the .map() intermediate
+      // array and the varargs spread into Math.max for every bubble per frame.
+      let widest = 0
+      for (let i = 0; i < lines.length; i++) {
+        const w = measureTextCached(ctx, lines[i])
+        if (w > widest) widest = w
+      }
+      const bubbleW = Math.min(BUBBLE_MAX_W, widest + style.padding * 2 + 4)
       const bubbleH = style.headerH + lines.length * style.lineH + style.padding + (truncated ? style.lineH * 0.8 : 0)
 
       // Cache dimensions so hit-detection can use exact same values

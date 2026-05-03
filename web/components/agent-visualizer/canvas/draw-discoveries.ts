@@ -5,10 +5,17 @@ import { truncateText } from './draw-misc'
 import { getTextSprite, drawTextSprite } from './render-cache'
 import { type ViewBounds, isPointVisible, isRectVisible } from './viewport'
 
+// Reused dash array for discovery connection lines — setLineDash always
+// copies the input, but reusing the source avoids one allocation per call.
+const DISCOVERY_DASH: readonly number[] = [3, 5]
+
 export function drawDiscoveryConnections(
   ctx: CanvasRenderingContext2D, discoveries: Discovery[], agents: Map<string, Agent>,
   bounds?: ViewBounds,
 ) {
+  // Stroke style and dash are constant across the loop — set them once and
+  // restore at the end so each iteration only modulates globalAlpha + stroke.
+  let opened = false
   for (const disc of discoveries) {
     const agent = agents.get(disc.agentId)
     if (!agent || disc.opacity < 0.1) continue
@@ -17,18 +24,22 @@ export function drawDiscoveryConnections(
     // is short and dashed, so we don't bother with a tighter check.
     if (bounds && !isPointVisible(agent.x, agent.y, bounds, 32) && !isPointVisible(disc.x, disc.y, bounds, 32)) continue
 
-    ctx.save()
+    if (!opened) {
+      ctx.save()
+      ctx.strokeStyle = COLORS.holoBase + '30'
+      ctx.lineWidth = 0.5
+      ctx.setLineDash(DISCOVERY_DASH as number[])
+      opened = true
+    }
+
     ctx.globalAlpha = disc.opacity * 0.3
-    ctx.strokeStyle = COLORS.holoBase + '30'
-    ctx.lineWidth = 0.5
-    ctx.setLineDash([3, 5])
     ctx.beginPath()
     ctx.moveTo(agent.x, agent.y)
     ctx.lineTo(disc.x, disc.y)
     ctx.stroke()
-    ctx.setLineDash([])
-    ctx.restore()
   }
+
+  if (opened) ctx.restore()
 }
 
 export function drawDiscoveries(

@@ -126,8 +126,12 @@ export function AgentCanvas({
   // ─── Stable refs for animation loop & event handlers ────────────────────
   // Simulation data (agents, particles, etc.) is synced from simulationRef
   // at the top of each draw frame, so it's always fresh even without re-renders.
+  // The drawProps object itself is allocated ONCE — every subsequent render
+  // mutates fields in place rather than reallocating. Parents re-render at
+  // ~4 Hz (UI cadence) plus drag/resize, so the closure + spread cost adds
+  // up; mirroring the Pixi twin (`pixi-canvas.tsx`) keeps both paths uniform.
   const sim = simulationRef.current
-  const makeDrawProps = (prev?: { isDragging: boolean }) => ({
+  const drawPropsRef = useRef({
     agents: sim.agents, toolCalls: sim.toolCalls,
     particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
     selectedAgentId, hoveredAgentId, showStats, showHexGrid,
@@ -135,10 +139,31 @@ export function AgentCanvas({
     simTime: sim.currentTime, pauseAutoFit, dimensions,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
     onToolCallClick, onDiscoveryClick,
-    isDragging: prev?.isDragging ?? false,
+    isDragging: false,
   })
-  const drawPropsRef = useRef(makeDrawProps())
-  drawPropsRef.current = makeDrawProps(drawPropsRef.current)
+
+  // Sync React-driven props into the existing ref each render. Simulation
+  // data (agents/edges/etc.) is intentionally NOT updated here — the draw
+  // loop overwrites those each frame from `simulationRef.current` so this
+  // hot path stays a tiny field-assignment block.
+  {
+    const p = drawPropsRef.current
+    p.selectedAgentId = selectedAgentId
+    p.hoveredAgentId = hoveredAgentId
+    p.showStats = showStats
+    p.showHexGrid = showHexGrid
+    p.showCostOverlay = showCostOverlay
+    p.selectedToolCallId = selectedToolCallId
+    p.selectedDiscoveryId = selectedDiscoveryId
+    p.pauseAutoFit = pauseAutoFit
+    p.dimensions = dimensions
+    p.onAgentDrag = onAgentDrag
+    p.onAgentClick = onAgentClick
+    p.onAgentHover = onAgentHover
+    p.onContextMenu = onContextMenu
+    p.onToolCallClick = onToolCallClick
+    p.onDiscoveryClick = onDiscoveryClick
+  }
 
   // ─── Camera ─────────────────────────────────────────────────────────────
   const {
@@ -195,9 +220,15 @@ export function AgentCanvas({
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
-    const dpr = window.devicePixelRatio || 1
-    dprRef.current = dpr
+
     const observer = new ResizeObserver((entries) => {
+      // Re-read DPR each resize: dragging the window between monitors with
+      // different pixel densities triggers a resize without firing our
+      // matchMedia listener for the OLD DPR (it only fires once when the
+      // current density boundary is crossed). Refreshing here keeps the
+      // backing store correctly sized regardless of which event fires first.
+      const dpr = window.devicePixelRatio || 1
+      dprRef.current = dpr
       for (const entry of entries) {
         const w = entry.contentRect.width
         const h = entry.contentRect.height
@@ -206,7 +237,34 @@ export function AgentCanvas({
       }
     })
     observer.observe(container)
-    return () => observer.disconnect()
+
+    // matchMedia for the current resolution fires when DPR crosses any
+    // boundary (zoom, monitor swap on browsers that don't trigger resize).
+    // After a change we must re-subscribe at the new DPR — the previous
+    // query no longer matches and won't fire again.
+    let mql: MediaQueryList | null = null
+    let onChange: (() => void) | null = null
+    const subscribeDpr = () => {
+      const dpr = window.devicePixelRatio || 1
+      dprRef.current = dpr
+      mql = window.matchMedia(`(resolution: ${dpr}dppx)`)
+      onChange = () => {
+        const newDpr = window.devicePixelRatio || 1
+        dprRef.current = newDpr
+        const w = dimensionsRef.current.width
+        const h = dimensionsRef.current.height
+        if (w > 0 && h > 0) bloomRef.current?.resize(w * newDpr, h * newDpr)
+        if (mql && onChange) mql.removeEventListener('change', onChange)
+        subscribeDpr()
+      }
+      mql.addEventListener('change', onChange)
+    }
+    subscribeDpr()
+
+    return () => {
+      observer.disconnect()
+      if (mql && onChange) mql.removeEventListener('change', onChange)
+    }
   }, [])
 
 
