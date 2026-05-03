@@ -39,6 +39,9 @@ interface BubbleEntry {
   lastContentKey: string
   /** Cache key for role label. */
   lastLabelKey: string
+  /** Cache key for the background Graphics commands. Bubbles don't pulse,
+   *  so the inputs are just dimensions and role. (IR-6) */
+  lastBgKey: string
 }
 
 /** Pool of reusable bubble entries. */
@@ -101,23 +104,36 @@ export class BubblesLayer {
         const charW = approxCharW(style.fontSize)
         const maxCharsPerLine = Math.floor((BUBBLE_MAX_W - style.padding * 2 - 4) / charW)
 
-        // Simple line wrapping (approximation of Canvas2D wrapText)
-        const rawLines = text.split('\n')
-        const allLines: string[] = []
-        for (const para of rawLines) {
-          if (para.trim() === '') { allLines.push(''); continue }
-          const words = para.split(/\s+/)
-          let line = ''
-          for (const word of words) {
-            const test = line ? `${line} ${word}` : word
-            if (test.length > maxCharsPerLine && line) {
-              allLines.push(line)
-              line = word
-            } else {
-              line = test
+        // IR-3: cache the wrapped lines on the bubble itself so subsequent
+        // frames skip the rawLines.split + word loop. The cache key has
+        // a "pixi:" prefix so it doesn't collide with the canvas2d path's
+        // font-string key (`'12px monospace'`) on the same MessageBubble
+        // when both renderers run side-by-side.
+        const wrapKey = `pixi:${maxCharsPerLine}`
+        let allLines: string[]
+        if (bubble._cachedWrappedLines && bubble._cachedWrappedFont === wrapKey) {
+          allLines = bubble._cachedWrappedLines
+        } else {
+          // Simple line wrapping (approximation of Canvas2D wrapText)
+          const rawLines = text.split('\n')
+          allLines = []
+          for (const para of rawLines) {
+            if (para.trim() === '') { allLines.push(''); continue }
+            const words = para.split(/\s+/)
+            let line = ''
+            for (const word of words) {
+              const test = line ? `${line} ${word}` : word
+              if (test.length > maxCharsPerLine && line) {
+                allLines.push(line)
+                line = word
+              } else {
+                line = test
+              }
             }
+            if (line) allLines.push(line)
           }
-          if (line) allLines.push(line)
+          bubble._cachedWrappedLines = allLines
+          bubble._cachedWrappedFont = wrapKey
         }
 
         const truncated = allLines.length > BUBBLE_MAX_LINES
@@ -139,6 +155,12 @@ export class BubblesLayer {
           entry.container.visible = true
           entry.container.label = `bubble-${agent.id}`
           entry.container.eventMode = 'static'
+          // A pooled entry carries its previous bubble's cache keys.
+          // Reset them so the upcoming render re-emits all glyphs and
+          // background commands for the new bubble's content.
+          entry.lastContentKey = ''
+          entry.lastLabelKey = ''
+          entry.lastBgKey = ''
         }
 
         // ── Position + alpha ────────────────────────────────────────
@@ -148,12 +170,20 @@ export class BubblesLayer {
         entry.container.visible = true
 
         // ── Background ──────────────────────────────────────────────
+        // IR-6: gate on a key over the inputs (bubbleW/H/role drive every
+        // command on the Graphics object). Skipping the rebuild when nothing
+        // visual has changed avoids the per-frame clear+roundRect+fill+stroke
+        // chain — typical sessions have hundreds of bubbles.
         const bgColor = this.getBubbleBgTint(role)
         const bgAlpha = isThinking ? 0.08 : 0.12
-        entry.background.clear()
-        entry.background.roundRect(0, 0, bubbleW, bubbleH, BUBBLE_DRAW.borderRadius)
-        entry.background.fill({ color: bgColor, alpha: bgAlpha })
-        entry.background.stroke({ width: 0.5, color: bgColor, alpha: isThinking ? 0.15 : 0.25 })
+        const bgKey = `${bubbleW}|${bubbleH}|${role}`
+        if (bgKey !== entry.lastBgKey) {
+          entry.background.clear()
+          entry.background.roundRect(0, 0, bubbleW, bubbleH, BUBBLE_DRAW.borderRadius)
+          entry.background.fill({ color: bgColor, alpha: bgAlpha })
+          entry.background.stroke({ width: 0.5, color: bgColor, alpha: isThinking ? 0.15 : 0.25 })
+          entry.lastBgKey = bgKey
+        }
 
         // ── Role label ──────────────────────────────────────────────
         const labelStr = isThinking ? 'THINKING' : role === 'user' ? 'USER' : 'CLAUDE'
@@ -270,6 +300,7 @@ export class BubblesLayer {
       contentSprites: [],
       lastContentKey: '',
       lastLabelKey: '',
+      lastBgKey: '',
     }
   }
 

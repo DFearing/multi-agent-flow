@@ -17,6 +17,20 @@ import { getGlowTexture, getCircleTexture } from './pixi-app'
 import type { BezierSample } from './bezier-cache'
 import { sharedBezierCache, samplePolyline } from './bezier-cache'
 
+/** Pre-parsed tint for the highlight (center bright spot) — same value
+ *  for every particle, parsed once at module load instead of per-particle
+ *  per-frame. */
+const HOLO_HOT_TINT = parseHexColorAtModuleScope(COLORS.holoHot)
+
+/** Module-scope hex parser used only for HOLO_HOT_TINT. The class instance
+ *  has its own (identical) implementation that doubles as the cache writer. */
+function parseHexColorAtModuleScope(hex: string): number {
+  if (hex.startsWith('#')) {
+    return parseInt(hex.slice(1, 7), 16)
+  }
+  return 0xffffff
+}
+
 /** Pool of sprites to avoid allocation churn. Each frame we show/hide as needed. */
 interface SpriteEntry {
   sprite: Sprite
@@ -80,6 +94,14 @@ export class ParticlesLayer {
       const polyline = sharedBezierCache.get(edge, agents, toolCalls)
       if (!polyline) continue
 
+      // IR-4: cache the parsed numeric tint on the particle itself. The hex
+      // string is immutable for the particle's lifetime, so this is a one-time
+      // parse per particle (instead of 4+ parses per particle per frame).
+      if (particle._tint === undefined) {
+        particle._tint = this.parseColor(particle.color)
+      }
+      const particleTint = particle._tint
+
       const t = particle.progress
       const isReturn = particle.type === 'return' || particle.type === 'tool_return'
 
@@ -115,7 +137,7 @@ export class ParticlesLayer {
         // Scale relative to the 8px radius circle texture
         const s = scale / 8
         sprite.scale.set(s)
-        sprite.tint = this.parseColor(particle.color)
+        sprite.tint = particleTint
         sprite.alpha = alpha
         sprite.blendMode = 'normal'
       }
@@ -136,7 +158,7 @@ export class ParticlesLayer {
       core.y = py
       core.anchor.set(0.5)
       core.scale.set(particle.size / 8)
-      core.tint = this.parseColor(particle.color)
+      core.tint = particleTint
       core.alpha = 1
       core.blendMode = 'normal'
 
@@ -146,7 +168,7 @@ export class ParticlesLayer {
       highlight.y = py
       highlight.anchor.set(0.5)
       highlight.scale.set((particle.size * PARTICLE_DRAW.coreHighlightScale) / 8)
-      highlight.tint = this.parseColor(COLORS.holoHot)
+      highlight.tint = HOLO_HOT_TINT
       highlight.alpha = 0.5 // matches the '80' hex alpha from Canvas2D path
       highlight.blendMode = 'normal'
     }

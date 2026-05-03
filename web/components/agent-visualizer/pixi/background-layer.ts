@@ -43,6 +43,14 @@ const HOLO_TINT = parseColor(COLORS.holoBase)
 const HEX_GRID_TINT = parseColor(COLORS.hexGrid)
 
 /**
+ * Module-scope reusable bucket map for IR-7 alpha-bucketed hex-grid drawing.
+ * Keyed by quantized alpha; values are flat [cx, cy, …] coordinate arrays.
+ * Reused across frames: we clear each value's length to 0 instead of
+ * allocating a fresh Map. Mirrors the canvas2d HEX_BUCKETS singleton.
+ */
+const HEX_BUCKETS = new Map<number, number[]>()
+
+/**
  * Manages the background rendering layer. Contains depth particles,
  * an optional hex grid, and an active-agent highlight glow.
  */
@@ -60,6 +68,10 @@ export class BackgroundLayer {
 
   /** Active-agent glow sprite. */
   private glowSprite: Sprite
+
+  /** Last `activeAgentPos.color` string the glow tint was set from. The hex
+   *  parse + tint write are skipped when the color is unchanged. (MR-2) */
+  private lastGlowColor: string = ''
 
   /** Frame counter for lower-cadence ticks. */
   private frameCount = 0
@@ -137,7 +149,13 @@ export class BackgroundLayer {
       this.glowSprite.visible = true
       this.glowSprite.x = activeAgentPos.x
       this.glowSprite.y = activeAgentPos.y
-      this.glowSprite.tint = parseColor(activeAgentPos.color)
+      // MR-2: only re-parse + reassign tint when the color string actually
+      // changes. Active-agent identity changes far less often than the
+      // frame rate, so this is mostly a string compare per frame.
+      if (activeAgentPos.color !== this.lastGlowColor) {
+        this.glowSprite.tint = parseColor(activeAgentPos.color)
+        this.lastGlowColor = activeAgentPos.color
+      }
     } else {
       this.glowSprite.visible = false
     }
@@ -236,9 +254,12 @@ export class BackgroundLayer {
     const endX = startX + width / transform.scale + size * 6
     const endY = startY + height / transform.scale + hexHeight * 4
 
-    // Alpha-bucketed drawing (same strategy as Canvas2D)
+    // Alpha-bucketed drawing (same strategy as Canvas2D).
+    // IR-7: reuse the module-scope HEX_BUCKETS Map instead of allocating
+    // a fresh one each frame. Hex grids touch hundreds of cells per frame
+    // and the previous `new Map()` produced a steady allocation rate.
     const timeSin = time * 0.5
-    const buckets = new Map<number, number[]>()
+    for (const arr of HEX_BUCKETS.values()) arr.length = 0
 
     for (let x = startX; x < endX; x += size * 1.5) {
       for (let y = startY; y < endY; y += hexHeight) {
@@ -249,13 +270,13 @@ export class BackgroundLayer {
         const pulse = Math.sin(timeSin + dist * 0.005) * 0.3 + 0.7
         const alpha = Math.round(0.15 * pulse * 40) / 40
 
-        let bucket = buckets.get(alpha)
-        if (!bucket) { bucket = []; buckets.set(alpha, bucket) }
+        let bucket = HEX_BUCKETS.get(alpha)
+        if (!bucket) { bucket = []; HEX_BUCKETS.set(alpha, bucket) }
         bucket.push(cx, cy)
       }
     }
 
-    for (const [alpha, coords] of buckets) {
+    for (const [alpha, coords] of HEX_BUCKETS) {
       if (coords.length === 0) continue
 
       for (let i = 0; i < coords.length; i += 2) {
