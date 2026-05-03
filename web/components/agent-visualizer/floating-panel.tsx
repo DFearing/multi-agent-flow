@@ -20,6 +20,10 @@ interface FloatingPanelProps {
   /** Skip the CSS-zoom font scaling for this panel's content. Canvases handle
    *  their own DPR scaling and double-scaling makes them blurry. */
   noContentZoom?: boolean
+  /** Show the +/- font-scale buttons in the title bar. Defaults to true.
+   *  Canvas-only panels pass false because font scale doesn't affect text
+   *  rendered into a canvas, so the buttons appear to do nothing. */
+  showFontScale?: boolean
   /** Optional left-edge accent stripe + tinted title-bar background. Used by
    *  per-session canvas panels so each session is visually distinguishable. */
   accentColor?: string
@@ -77,6 +81,7 @@ export const FloatingPanel = memo(function FloatingPanel({
   noContentZoom = false,
   accentColor,
   onTitleEdit,
+  showFontScale = true,
   children,
 }: FloatingPanelProps) {
   const {
@@ -268,7 +273,7 @@ export const FloatingPanel = memo(function FloatingPanel({
               />
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <FontScaleButtons onAdjust={adjustFont} />
+              {showFontScale && <FontScaleButtons onAdjust={adjustFont} />}
               {otherInstances.length > 0 && (
                 <>
                   <SendButton direction="prev" onSend={() => sendPanelToPrev(id)} />
@@ -323,7 +328,7 @@ export const FloatingPanel = memo(function FloatingPanel({
               />
             )}
             <div style={{ position: 'absolute', right: 4, top: 0, bottom: 0, display: 'flex', alignItems: 'center', gap: 2 }}>
-              <FontScaleButtons onAdjust={adjustFont} />
+              {showFontScale && <FontScaleButtons onAdjust={adjustFont} />}
               {otherInstances.length > 0 && (
                 <>
                   <SendButton direction="prev" onSend={() => sendPanelToPrev(id)} />

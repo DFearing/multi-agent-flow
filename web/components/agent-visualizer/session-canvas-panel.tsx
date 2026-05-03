@@ -268,6 +268,7 @@ function SessionCanvasPanelImpl({
       onTitleEdit={(next) => setName(sessionId, next)}
       onClose={onClose ? handleClose : undefined}
       noContentZoom
+      showFontScale={false}
     >
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: sessionColor.tint }}>
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>

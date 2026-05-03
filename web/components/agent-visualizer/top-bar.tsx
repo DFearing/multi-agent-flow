@@ -11,7 +11,7 @@ import { FPSIndicator } from "./fps-indicator"
 import { usePanelLayout } from "@/hooks/use-panel-layout"
 import type { WorkspaceFilterAPI } from "@/hooks/use-workspace-filter"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
-import { FRAME_CAP_OPTIONS, BLOOM_THROTTLE_OPTIONS, EFFECT_LABELS, type EffectToggles } from "@/hooks/use-perf-settings"
+import type { EffectToggles } from "@/hooks/use-perf-settings"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
 
@@ -234,21 +234,20 @@ export const TopBar = memo(function TopBar({
           )}
         </div>
 
-        <FPSIndicator />
+        <FPSIndicator
+          frameCap={frameCap}
+          onFrameCapChange={onFrameCapChange}
+          effects={effects}
+          onEffectChange={onEffectChange}
+          bloomThrottle={bloomThrottle}
+          onBloomThrottleChange={onBloomThrottleChange}
+        />
 
         {/* Spacer pushes info to the right */}
         <div className="flex-1" />
 
         {/* Right-side info/controls */}
         <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
-          <PerfButton
-            frameCap={frameCap}
-            onFrameCapChange={onFrameCapChange}
-            effects={effects}
-            onEffectChange={onEffectChange}
-            bloomThrottle={bloomThrottle}
-            onBloomThrottleChange={onBloomThrottleChange}
-          />
           {isVSCode && <ConnectionIndicator status={connectionStatus} />}
 
           {/* Panel toggle group — kept tightly spaced via inner gap-1, but each
@@ -274,10 +273,11 @@ export const TopBar = memo(function TopBar({
             sessions={allSessions}
             onRemoveSession={onRemoveSession}
           />
-          {hiddenCanvases && hiddenCanvases.size > 0 && onShowCanvas && (
-            <ClosedCanvasChips
+          {hiddenCanvases && onShowCanvas && (
+            <ClosedWindowsButton
               hiddenIds={hiddenCanvases}
               sessions={allSessions}
+              activeIds={sessionsWithActivity}
               onShow={onShowCanvas}
             />
           )}
@@ -311,160 +311,6 @@ export const TopBar = memo(function TopBar({
     </FloatingPanel>
   )
 })
-
-// ─── Performance settings button + popover ─────────────────────────────────
-// Frame-rate cap (Off/120/60/30/15) and per-effect toggles. Lowering the cap
-// reduces GPU/CPU load and battery drain without making individual frames
-// faster; turning effects off cuts per-frame work.
-
-function PerfButton({
-  frameCap,
-  onFrameCapChange,
-  effects,
-  onEffectChange,
-  bloomThrottle,
-  onBloomThrottleChange,
-}: {
-  frameCap: number
-  onFrameCapChange: (fps: number) => void
-  effects: EffectToggles
-  onEffectChange: (key: keyof EffectToggles, value: boolean) => void
-  bloomThrottle: number
-  onBloomThrottleChange: (value: number) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const buttonRef = useRef<HTMLDivElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
-  const [anchorRect, setAnchorRect] = useState<{ top: number; right: number } | null>(null)
-
-  useEffect(() => {
-    if (!open) { setAnchorRect(null); return }
-    const update = () => {
-      const r = buttonRef.current?.getBoundingClientRect()
-      if (r) setAnchorRect({ top: r.bottom + 6, right: window.innerWidth - r.right })
-    }
-    update()
-    window.addEventListener('resize', update)
-    window.addEventListener('scroll', update, true)
-    return () => {
-      window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (buttonRef.current?.contains(target)) return
-      if (popoverRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    window.addEventListener('mousedown', handler)
-    return () => window.removeEventListener('mousedown', handler)
-  }, [open])
-
-  const offCount = Object.values(effects).filter(v => !v).length
-  const capLabel = FRAME_CAP_OPTIONS.find(o => o.value === frameCap)?.label ?? 'Uncapped'
-  const summary = offCount > 0
-    ? `Perf · ${capLabel} · ${offCount} off`
-    : `Perf · ${capLabel}`
-
-  const popoverContent = (
-    <div
-      ref={popoverRef}
-      style={{
-        position: 'fixed',
-        top: anchorRect?.top ?? 0,
-        right: anchorRect?.right ?? 0,
-        minWidth: 260,
-        padding: 10,
-        background: COLORS.panelBg,
-        border: `1px solid ${COLORS.glassBorder}`,
-        borderRadius: 6,
-        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-        zIndex: 99999,
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-      }}
-    >
-      <div className="text-[10px] font-mono mb-2" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
-        FRAME CAP
-      </div>
-      <select
-        value={frameCap}
-        onChange={(e) => onFrameCapChange(Number(e.target.value))}
-        className="w-full font-mono text-[11px] px-2 py-1 rounded mb-3"
-        style={{
-          background: COLORS.toggleInactive,
-          border: `1px solid ${COLORS.toggleBorder}`,
-          color: COLORS.textPrimary,
-          cursor: 'pointer',
-        }}
-      >
-        {FRAME_CAP_OPTIONS.map(opt => (
-          <option key={opt.value} value={opt.value}>{opt.label}</option>
-        ))}
-      </select>
-
-      <div className="text-[10px] font-mono mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
-        EFFECTS
-      </div>
-      {(Object.keys(EFFECT_LABELS) as Array<keyof EffectToggles>).map(key => (
-        <label
-          key={key}
-          className="flex items-center gap-2 py-1 px-1 rounded cursor-pointer"
-          style={{ color: effects[key] ? COLORS.textPrimary : COLORS.textMuted }}
-        >
-          <input
-            type="checkbox"
-            checked={effects[key]}
-            onChange={(e) => onEffectChange(key, e.target.checked)}
-            style={{ accentColor: COLORS.holoBase, cursor: 'pointer' }}
-          />
-          <span className="text-[10px] font-mono">{EFFECT_LABELS[key]}</span>
-        </label>
-      ))}
-      {effects.bloom && (
-        <>
-          <div className="text-[10px] font-mono mt-3 mb-1" style={{ color: COLORS.textMuted, letterSpacing: '0.08em' }}>
-            BLOOM RATE
-          </div>
-          <select
-            value={bloomThrottle}
-            onChange={(e) => onBloomThrottleChange(Number(e.target.value))}
-            className="w-full font-mono text-[11px] px-2 py-1 rounded mb-1"
-            style={{
-              background: COLORS.toggleInactive,
-              border: `1px solid ${COLORS.toggleBorder}`,
-              color: COLORS.textPrimary,
-              cursor: 'pointer',
-            }}
-          >
-            {BLOOM_THROTTLE_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </>
-      )}
-
-      <div className="text-[9px] font-mono mt-2 pt-2" style={{ color: COLORS.textMuted, borderTop: `1px solid ${COLORS.holoBorder06}` }}>
-        Lower cap saves power; bloom is the heaviest Canvas2D effect.
-      </div>
-    </div>
-  )
-
-  return (
-    <>
-      <div ref={buttonRef} style={{ display: 'inline-flex' }}>
-        <ToggleButton active={frameCap > 0 || offCount > 0} onClick={() => setOpen(o => !o)}>
-          {summary}
-        </ToggleButton>
-      </div>
-      {open && anchorRect && typeof document !== 'undefined' && createPortal(popoverContent, document.body)}
-    </>
-  )
-}
 
 // ─── Workspace filter button + popover ──────────────────────────────────────
 
@@ -670,59 +516,154 @@ function WorkspaceFilterButton({
 }
 
 
-// ─── Closed-canvas chips ────────────────────────────────────────────────────
-// Renders one chip per ✕-closed canvas. Click to reopen. Sits next to the
-// workspace filter so reopening hidden things lives in one neighborhood.
+// ─── Closed windows button + popover ───────────────────────────────────────
+// One button labeled "Windows · N" that opens a popover listing each ✕-closed
+// canvas as a clickable row. Replaces an earlier inline-chip strip that grew
+// unwieldy when many canvases were closed.
 
-function ClosedCanvasChips({
+function ClosedWindowsButton({
   hiddenIds,
   sessions,
+  activeIds,
   onShow,
 }: {
   hiddenIds: ReadonlySet<string>
   sessions: SessionInfo[]
+  activeIds: ReadonlySet<string>
   onShow: (sessionId: string) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const buttonRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [anchorRect, setAnchorRect] = useState<{ top: number; right: number } | null>(null)
+
   const items = useMemo(() => {
     const byId = new Map(sessions.map(s => [s.id, s]))
     return [...hiddenIds].map(id => ({
       id,
       label: byId.get(id)?.label ?? id.slice(0, 8),
+      active: activeIds.has(id),
     }))
-  }, [hiddenIds, sessions])
+  }, [hiddenIds, sessions, activeIds])
 
-  if (items.length === 0) return null
+  useEffect(() => {
+    if (!open) { setAnchorRect(null); return }
+    const update = () => {
+      const r = buttonRef.current?.getBoundingClientRect()
+      if (r) setAnchorRect({ top: r.bottom + 6, right: window.innerWidth - r.right })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [open])
 
-  return (
-    <div className="flex items-center gap-1 flex-wrap" style={{ maxWidth: 360 }}>
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (buttonRef.current?.contains(target)) return
+      if (popoverRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    window.addEventListener('mousedown', handler)
+    return () => window.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const isEmpty = items.length === 0
+
+  const popoverContent = (
+    <div
+      ref={popoverRef}
+      style={{
+        position: 'fixed',
+        top: anchorRect?.top ?? 0,
+        right: anchorRect?.right ?? 0,
+        minWidth: 240,
+        maxHeight: 360,
+        overflow: 'auto',
+        padding: 6,
+        background: COLORS.panelBg,
+        border: `1px solid ${COLORS.glassBorder}`,
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+        zIndex: 99999,
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
       {items.map(item => (
         <button
           key={item.id}
           onClick={() => onShow(item.id)}
-          title={`Reopen "${item.label}"`}
+          title={item.active ? `Reopen "${item.label}" (active)` : `Reopen "${item.label}"`}
           className="rounded transition-all"
           style={{
-            padding: '3px 8px',
-            fontSize: 10,
+            padding: '6px 10px',
+            fontSize: 12,
             fontFamily: "'SF Mono', 'Fira Code', monospace",
             color: COLORS.textPrimary,
             background: COLORS.toggleInactive,
             border: `1px dashed ${COLORS.toggleBorder}`,
-            opacity: 0.85,
-            display: 'inline-flex',
+            opacity: 0.9,
+            display: 'flex',
             alignItems: 'center',
-            gap: 4,
-            maxWidth: 160,
+            gap: 6,
+            width: '100%',
+            textAlign: 'left',
+            cursor: 'pointer',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}
         >
-          <span aria-hidden style={{ fontSize: 11, lineHeight: 1 }}>↩</span>
+          {item.active ? (
+            <span
+              aria-hidden
+              style={{
+                width: 8, height: 8, borderRadius: '50%',
+                background: COLORS.complete,
+                boxShadow: `0 0 4px ${COLORS.complete}`,
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <span aria-hidden style={{ width: 8, flexShrink: 0 }} />
+          )}
+          <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>↩</span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
         </button>
       ))}
     </div>
+  )
+
+  return (
+    <>
+      <div
+        ref={buttonRef}
+        style={{
+          display: 'inline-flex',
+          opacity: isEmpty ? 0.5 : 1,
+          cursor: isEmpty ? 'not-allowed' : 'pointer',
+        }}
+        title={isEmpty ? 'No closed windows' : undefined}
+      >
+        <ToggleButton
+          active={open && !isEmpty}
+          onClick={() => { if (!isEmpty) setOpen(o => !o) }}
+          style={isEmpty ? { pointerEvents: 'none' } : undefined}
+        >
+          {`Windows · ${items.length}`}
+        </ToggleButton>
+      </div>
+      {open && !isEmpty && anchorRect && typeof document !== 'undefined' && createPortal(popoverContent, document.body)}
+    </>
   )
 }
 
