@@ -1,16 +1,23 @@
 /**
- * Edge rendering layer — one MeshRope per edge, driven by precomputed
+ * Edge rendering layer — one custom strip Mesh per edge, driven by precomputed
  * polyline samples from BezierCache.
+ *
+ * Each mesh is a triangle strip whose vertices are placed ±beamWidth/2 along
+ * the curve normal at every sample point. This restores the per-edge-type
+ * width that the previous MeshRope path silently overrode (MeshRope's `width`
+ * option is geometry-only — Pixi v8's renderer ignores it once the mesh is
+ * batched, so all edges rendered at the texture's native height).
  *
  * Active edges (those with particles) get brighter tint + higher alpha;
  * idle edges are dimmer. A time-based pulse modulates active-edge alpha
- * to match the Canvas2D path's animation.
+ * to match the Canvas2D path's animation. All edges share a single 1×1
+ * white texture and tint per mesh — preserves Pixi's auto-batching.
  *
  * Follows the same pattern as ParticlesLayer: constructor creates a
  * Container, update() is called once per rAF tick, dispose() tears down.
  */
 
-import { Container, MeshRope, Point, Texture } from 'pixi.js'
+import { Container, Mesh, MeshGeometry, Texture } from 'pixi.js'
 import type { Agent, Edge, Particle, ToolCallNode } from '@/lib/agent-types'
 import { BEAM, ANIM } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
@@ -18,11 +25,17 @@ import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { getActiveEdgeIds } from '../canvas/draw-edges'
 import { sharedBezierCache } from './bezier-cache'
 
-/** Persistent state for a single edge rope. */
+/** Persistent state for a single edge mesh. */
 interface EdgeEntry {
-  rope: MeshRope
-  /** The point objects fed to MeshRope — mutated in-place each frame. */
-  points: Point[]
+  /** Strip mesh — two vertices per polyline sample (top/bottom of strip). */
+  mesh: Mesh<MeshGeometry>
+  /** Reference to the geometry's positions array — mutated in-place each frame. */
+  positions: Float32Array
+  /** Beam width this entry was built for. If the edge type changes, the
+   *  geometry is rebuilt to match. (In practice edge.type is immutable.) */
+  beamWidth: number
+  /** Number of samples (sample count along the polyline). */
+  sampleCount: number
   /** Edge id this entry is keyed to. */
   edgeId: string
 }
@@ -35,37 +48,94 @@ function parseHexColor(hex: string): number {
   return 0xffffff
 }
 
-/** Width of the rope texture in pixels. The texture is a 1-pixel-tall white
- *  strip — the rope's visual width is controlled by the texture height and
- *  the `width` option on MeshRope. */
-const ROPE_TEXTURE_SIZE = 4
-
-/** Lazily created 1×N white texture for MeshRope. */
+/** Lazily created 1×1 white texture shared by every edge mesh. The mesh's
+ *  geometry encodes width directly; the texture is just a colourable surface
+ *  for the strip. Sharing one texture across all meshes keeps batching viable. */
 let ropeTexture: Texture | null = null
 
 function getRopeTexture(): Texture {
   if (ropeTexture) return ropeTexture
   const canvas = document.createElement('canvas')
-  canvas.width = ROPE_TEXTURE_SIZE
-  canvas.height = ROPE_TEXTURE_SIZE
+  canvas.width = 1
+  canvas.height = 1
   const ctx = canvas.getContext('2d')
   if (ctx) {
     ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, ROPE_TEXTURE_SIZE, ROPE_TEXTURE_SIZE)
+    ctx.fillRect(0, 0, 1, 1)
   }
   ropeTexture = Texture.from(canvas)
   return ropeTexture
 }
 
 /**
+ * Build the strip geometry for a polyline of length `sampleCount`. Positions
+ * are zero-initialised (the caller fills them on the same frame). Indices and
+ * UVs are static — they depend only on `sampleCount`, not the actual sample
+ * coordinates, so they're built once and never touched again.
+ *
+ * Layout: each sample contributes two vertices (top/bottom of the strip).
+ * Vertex order: [s0_top, s0_bot, s1_top, s1_bot, …]. Two triangles per quad.
+ */
+function buildStripGeometry(sampleCount: number): MeshGeometry {
+  const vertexCount = sampleCount * 2
+  const positions = new Float32Array(vertexCount * 2) // x, y per vertex
+  const uvs = new Float32Array(vertexCount * 2)
+  const quadCount = sampleCount - 1
+  const indices = new Uint32Array(quadCount * 6)
+
+  // UVs: u alternates 0/1 across the strip width, v progresses along its length.
+  // Texture is 1×1 so values are visually irrelevant, but Pixi requires the
+  // attribute to exist and be sized correctly.
+  for (let i = 0; i < sampleCount; i++) {
+    const v = i / Math.max(1, sampleCount - 1)
+    uvs[i * 4 + 0] = 0  // top u
+    uvs[i * 4 + 1] = v  // top v
+    uvs[i * 4 + 2] = 1  // bot u
+    uvs[i * 4 + 3] = v  // bot v
+  }
+
+  // Indices: quad i is samples[i] and samples[i+1].
+  // Vertex offsets: top[i] = 2i, bot[i] = 2i+1.
+  for (let i = 0; i < quadCount; i++) {
+    const t0 = i * 2
+    const b0 = i * 2 + 1
+    const t1 = i * 2 + 2
+    const b1 = i * 2 + 3
+    const o = i * 6
+    indices[o + 0] = t0
+    indices[o + 1] = b0
+    indices[o + 2] = t1
+    indices[o + 3] = b0
+    indices[o + 4] = b1
+    indices[o + 5] = t1
+  }
+
+  return new MeshGeometry({
+    positions,
+    uvs,
+    indices,
+    topology: 'triangle-list',
+  })
+}
+
+/** Destroy a mesh entry's GPU resources. The geometry is per-edge so we own
+ *  it and free its buffers; the texture is module-shared so we never free it. */
+function destroyEntryMesh(entry: EdgeEntry): void {
+  // Geometry first — destroyBuffers=true releases the underlying GPU buffers.
+  // Mesh.destroy() does not cascade into geometry, so this must be explicit.
+  entry.mesh.geometry.destroy(true)
+  entry.mesh.destroy({ children: true, texture: false })
+}
+
+/**
  * Manages the edge rendering layer. Owns a Container that the caller adds
  * to the Pixi stage. Call `update()` each frame with the current simulation
- * state to position and style ropes.
+ * state to position and style meshes.
  */
 export class EdgesLayer {
   readonly container: Container
 
-  /** Persistent rope entries keyed by edge id. */
+  /** Persistent mesh entries keyed by edge id. */
   private entries = new Map<string, EdgeEntry>()
 
   /** Tint values for tool vs parent-child edges, precomputed once. */
@@ -80,7 +150,7 @@ export class EdgesLayer {
   }
 
   /**
-   * Update all edge ropes for the current frame.
+   * Update all edge meshes for the current frame.
    * Called once per rAF tick from pixi-canvas.tsx.
    */
   update(
@@ -122,60 +192,64 @@ export class EdgesLayer {
       const tint = edge.type === 'tool' ? this.toolTint : this.parentChildTint
       const beamWidth = edge.type === 'tool' ? BEAM.tool.startW : BEAM.parentChild.startW
 
+      const samples = polyline.samples
+      const sampleCount = samples.length
+
       let entry = this.entries.get(edge.id)
 
-      if (!entry) {
-        // Create new rope for this edge
-        const points = polyline.samples.map(s => new Point(s.x, s.y))
-        const rope = new MeshRope({
-          texture: getRopeTexture(),
-          points,
-          width: beamWidth,
-        })
-        rope.label = `edge-${edge.id}`
-        this.container.addChild(rope)
-        entry = { rope, points, edgeId: edge.id }
-        this.entries.set(edge.id, entry)
-      } else {
-        // Update existing rope's point positions from the cache
-        const samples = polyline.samples
-        const pts = entry.points
-
-        // If sample count changed (shouldn't normally), rebuild points array
-        if (pts.length !== samples.length) {
-          const newPoints = samples.map(s => new Point(s.x, s.y))
-          // MeshRope in v8 uses RopeGeometry constructed from the points array.
-          // We must replace the rope since the geometry's vertex count is fixed.
-          entry.rope.destroy()
-          this.container.removeChild(entry.rope)
-          const rope = new MeshRope({
-            texture: getRopeTexture(),
-            points: newPoints,
-            width: beamWidth,
-          })
-          rope.label = `edge-${edge.id}`
-          this.container.addChild(rope)
-          entry.rope = rope
-          entry.points = newPoints
-        } else {
-          // Mutate point positions in-place — MeshRope auto-updates geometry
-          for (let i = 0; i < samples.length; i++) {
-            pts[i].x = samples[i].x
-            pts[i].y = samples[i].y
-          }
+      // Rebuild from scratch if missing OR if sample count / width changed
+      // (edge.type doesn't change in practice, but guard anyway).
+      if (!entry || entry.sampleCount !== sampleCount || entry.beamWidth !== beamWidth) {
+        if (entry) {
+          destroyEntryMesh(entry)
+          this.container.removeChild(entry.mesh)
         }
+        const geometry = buildStripGeometry(sampleCount)
+        const mesh = new Mesh<MeshGeometry>({
+          geometry,
+          texture: getRopeTexture(),
+        })
+        mesh.label = `edge-${edge.id}`
+        this.container.addChild(mesh)
+        entry = {
+          mesh,
+          positions: geometry.positions,
+          beamWidth,
+          sampleCount,
+          edgeId: edge.id,
+        }
+        this.entries.set(edge.id, entry)
       }
 
-      // Style the rope
-      entry.rope.tint = tint
-      entry.rope.alpha = baseAlpha * pulsing
-      entry.rope.visible = true
+      // Mutate vertex positions in place: ±halfWidth along the sample normal.
+      const positions = entry.positions
+      const halfW = beamWidth / 2
+      for (let i = 0; i < sampleCount; i++) {
+        const s = samples[i]
+        const ox = s.nx * halfW
+        const oy = s.ny * halfW
+        const o = i * 4 // 2 vertices per sample, 2 floats per vertex
+        positions[o + 0] = s.x + ox  // top.x
+        positions[o + 1] = s.y + oy  // top.y
+        positions[o + 2] = s.x - ox  // bottom.x
+        positions[o + 3] = s.y - oy  // bottom.y
+      }
+      // Flag the GPU buffer as dirty so the upload happens this frame.
+      entry.mesh.geometry.getBuffer('aPosition').update()
+
+      // Style the mesh
+      entry.mesh.tint = tint
+      entry.mesh.alpha = baseAlpha * pulsing
+      entry.mesh.visible = true
     }
 
-    // Hide ropes for edges no longer present
+    // Drop entries for edges no longer present. Keeping them around forever
+    // (the previous "hide" behaviour) leaked GPU buffers across long sessions.
     for (const [id, entry] of this.entries) {
       if (!aliveIds.has(id)) {
-        entry.rope.visible = false
+        destroyEntryMesh(entry)
+        this.container.removeChild(entry.mesh)
+        this.entries.delete(id)
       }
     }
 
@@ -190,7 +264,8 @@ export class EdgesLayer {
    *  may still depend on it, and the singleton survives mount/remount cycles. */
   dispose(): void {
     for (const entry of this.entries.values()) {
-      entry.rope.destroy()
+      // Geometry is per-edge so we own it; texture is shared so we don't.
+      destroyEntryMesh(entry)
     }
     this.entries.clear()
     this.container.destroy({ children: true })
@@ -201,7 +276,7 @@ export class EdgesLayer {
     return this.entries.size
   }
 
-  /** Retrieve a rope entry by edge id — useful for tests. */
+  /** Retrieve a mesh entry by edge id — useful for tests. */
   getEntry(edgeId: string): EdgeEntry | undefined {
     return this.entries.get(edgeId)
   }

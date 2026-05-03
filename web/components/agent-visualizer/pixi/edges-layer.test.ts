@@ -14,12 +14,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // vi.mock factories are hoisted — all definitions must be self-contained.
 
 vi.mock('pixi.js', () => {
-  class MockPoint {
-    x: number
-    y: number
-    constructor(x = 0, y = 0) { this.x = x; this.y = y }
-  }
-
   class MockContainer {
     label = ''
     children: unknown[] = []
@@ -31,26 +25,51 @@ vi.mock('pixi.js', () => {
     destroy() { this.children.length = 0 }
   }
 
-  class MockMeshRope {
+  // Minimal Buffer.update() / getBuffer() surface so the layer's
+  // `geometry.getBuffer('aPosition').update()` call works in jsdom.
+  class MockBuffer {
+    data: Float32Array
+    _updates = 0
+    constructor(data: Float32Array) { this.data = data }
+    update() { this._updates++ }
+  }
+
+  class MockMeshGeometry {
+    positions: Float32Array
+    uvs: Float32Array
+    indices: Uint32Array
+    private _positionBuffer: MockBuffer
+    constructor(opts: { positions: Float32Array; uvs: Float32Array; indices: Uint32Array }) {
+      this.positions = opts.positions
+      this.uvs = opts.uvs
+      this.indices = opts.indices
+      this._positionBuffer = new MockBuffer(opts.positions)
+    }
+    getBuffer(name: string) {
+      if (name === 'aPosition') return this._positionBuffer
+      throw new Error(`unknown buffer ${name}`)
+    }
+    destroy(_destroyBuffers?: boolean) { /* no-op */ }
+  }
+
+  class MockMesh {
     label = ''
     tint = 0xffffff
     alpha = 1
     visible = true
+    geometry: MockMeshGeometry
     texture: unknown
-    points: InstanceType<typeof MockPoint>[]
-    width: number
-    constructor(opts: { texture: unknown; points: InstanceType<typeof MockPoint>[]; width?: number }) {
+    constructor(opts: { geometry: MockMeshGeometry; texture: unknown }) {
+      this.geometry = opts.geometry
       this.texture = opts.texture
-      this.points = opts.points
-      this.width = opts.width ?? 1
     }
-    destroy() { /* no-op */ }
+    destroy(_opts?: unknown) { /* no-op */ }
   }
 
   return {
     Container: MockContainer,
-    MeshRope: MockMeshRope,
-    Point: MockPoint,
+    Mesh: MockMesh,
+    MeshGeometry: MockMeshGeometry,
     Texture: { from: () => ({ destroy: () => {} }) },
   }
 })
@@ -245,7 +264,7 @@ describe('EdgesLayer', () => {
     // BEAM.activeAlpha = 0.3, BEAM.idleAlpha = 0.08
     // Active alpha is modulated by pulsing: sin(0 * 4) * 0.1 + 0.9 = 0.9
     // So active alpha = 0.3 * 0.9 = 0.27, idle = 0.08 * 1 = 0.08
-    expect(activeEntry!.rope.alpha).toBeGreaterThan(idleEntry!.rope.alpha)
+    expect(activeEntry!.mesh.alpha).toBeGreaterThan(idleEntry!.mesh.alpha)
   })
 
   it('active edges get the correct tint for their type', () => {
@@ -268,12 +287,15 @@ describe('EdgesLayer', () => {
     const toolEntry = layer.getEntry('e2')
 
     // COLORS.holoBase = '#66ccff' -> 0x66ccff
-    expect(parentChildEntry!.rope.tint).toBe(0x66ccff)
+    expect(parentChildEntry!.mesh.tint).toBe(0x66ccff)
     // COLORS.tool = '#ffbb44' -> 0xffbb44
-    expect(toolEntry!.rope.tint).toBe(0xffbb44)
+    expect(toolEntry!.mesh.tint).toBe(0xffbb44)
   })
 
-  it('hides ropes for edges that disappear between frames', () => {
+  it('destroys mesh entries for edges that disappear between frames', () => {
+    // Stale-id sweep (CR-3): when an edge id no longer appears in the
+    // current frame's input, its entry is destroyed and removed from the
+    // map — preventing the previously unbounded growth of hidden meshes.
     const layer = new EdgesLayer()
     const agents = new Map<string, Agent>([
       ['a1', makeAgent('a1', 0, 0)],
@@ -286,15 +308,17 @@ describe('EdgesLayer', () => {
       [makeEdge('e1', 'a1', 'a2'), makeEdge('e2', 'a1', 'a3')],
       [], agents, new Map(), 0,
     )
-    expect(layer.getEntry('e1')!.rope.visible).toBe(true)
-    expect(layer.getEntry('e2')!.rope.visible).toBe(true)
+    expect(layer.getEntry('e1')!.mesh.visible).toBe(true)
+    expect(layer.getEntry('e2')!.mesh.visible).toBe(true)
+    expect(layer.entryCount).toBe(2)
 
-    // Frame 2: only e1 remains
+    // Frame 2: only e1 remains — e2 entry should be destroyed and removed
     layer.update(
       [makeEdge('e1', 'a1', 'a2')],
       [], agents, new Map(), 1,
     )
-    expect(layer.getEntry('e1')!.rope.visible).toBe(true)
-    expect(layer.getEntry('e2')!.rope.visible).toBe(false)
+    expect(layer.getEntry('e1')!.mesh.visible).toBe(true)
+    expect(layer.getEntry('e2')).toBeUndefined()
+    expect(layer.entryCount).toBe(1)
   })
 })
