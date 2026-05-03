@@ -22,9 +22,15 @@ function getOpenAILogoPath() {
 // Pre-baked brand-spark sprite cache. shadowBlur on a per-frame fill is
 // among the slowest Canvas2D paths (Chrome forces an off-screen render
 // pass), so we render the spark + glow once into an off-screen canvas and
-// blit it via drawImage on subsequent frames. Cache key includes radius
-// (rounded to integer logical px) so the sprite stays crisp for the
-// agent's actual size; breathe / scale variation reuses ~1 entry per agent.
+// blit it via drawImage on subsequent frames.
+//
+// Cache structure: nested over the natural cardinality (brand × color ×
+// radius bucket) so the per-frame lookup is three small Map.get() calls
+// and zero allocations. A flat string-keyed Map forced a per-call
+// `${brand}|${color}|${rQ}|${dpr}` allocation that defeated V8's inlining
+// of the brand-spark path — the CPU profile showed it adding ~830ms self
+// time over a 90s window. dpr is captured at module scope; if it changes
+// we evict the cache and start fresh.
 const SPARK_BLUR_MARGIN = 12
 
 interface BrandSparkSprite {
@@ -33,7 +39,13 @@ interface BrandSparkSprite {
   size: number
 }
 
-const brandSparkCache = new Map<string, BrandSparkSprite>()
+type BrandSparkBucket = Map<number, BrandSparkSprite>
+type BrandSparkColorMap = Map<string, BrandSparkBucket>
+const brandSparkCache: Record<'claude' | 'openai', BrandSparkColorMap> = {
+  claude: new Map(),
+  openai: new Map(),
+}
+let cachedDpr = -1
 
 function getBrandSparkSprite(
   brand: 'claude' | 'openai',
@@ -41,10 +53,23 @@ function getBrandSparkSprite(
   r: number,
   dpr: number,
 ): BrandSparkSprite {
-  const rQ = Math.max(1, Math.round(r))
-  const key = `${brand}|${color}|${rQ}|${dpr}`
-  const cached = brandSparkCache.get(key)
-  if (cached) return cached
+  if (dpr !== cachedDpr) {
+    brandSparkCache.claude.clear()
+    brandSparkCache.openai.clear()
+    cachedDpr = dpr
+  }
+  // r > 0 always in practice (agent radius); keep the floor as a guard.
+  // Bitwise OR truncates faster than Math.round for the small positive
+  // values seen here, and the +0.5 turns truncation into nearest-int.
+  const rQ = r < 1 ? 1 : (r + 0.5) | 0
+  const colorMap = brandSparkCache[brand]
+  let bucket = colorMap.get(color)
+  if (bucket === undefined) {
+    bucket = new Map()
+    colorMap.set(color, bucket)
+  }
+  const cached = bucket.get(rQ)
+  if (cached !== undefined) return cached
 
   // Sprite covers the spark (visual extent ~ rQ * sparkScale * 2) plus a
   // blur margin on every side so the glow doesn't clip at sprite edges.
@@ -75,7 +100,7 @@ function getBrandSparkSprite(
   }
 
   const sprite: BrandSparkSprite = { canvas, size }
-  brandSparkCache.set(key, sprite)
+  bucket.set(rQ, sprite)
   return sprite
 }
 
