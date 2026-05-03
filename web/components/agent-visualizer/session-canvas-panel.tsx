@@ -275,6 +275,7 @@ function SessionCanvasPanelImpl({
           <AgentCanvas
             simulationRef={sim.frameRef}
             sessionId={sessionId}
+            customMainAgentName={getName(sessionId)}
             selectedAgentId={selectedAgentId}
             hoveredAgentId={hoveredAgentId}
             showStats={showStats}

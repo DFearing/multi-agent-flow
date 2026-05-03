@@ -218,6 +218,8 @@ export const CONTEXT_BAR = {
   barHeight: 6,
   /** Y offset from agent radius */
   yOffset: 22,
+  /** Y offset when the agent label has a two-line treatment (custom name + "Orchestrator" subtitle). */
+  yOffsetWithSubtitle: 36,
   borderRadius: 3,
   /** Font for token count label */
   fontSize: 7,

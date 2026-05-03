@@ -59,6 +59,11 @@ interface CanvasProps {
    *  prop so callers can pass it without a type error; future per-session
    *  overlays (cost, badges) can read it. */
   sessionId?: string
+  /** User-set custom name for this session's main/orchestrator agent (from
+   *  useSessionNames). When defined, the main agent's hex draws this string
+   *  as its primary label with "Orchestrator" as a subtitle. When undefined,
+   *  the main agent draws "Orchestrator" alone. */
+  customMainAgentName?: string
   /** When true (default), pause the render rAF when the canvas scrolls
    *  off-screen. The simulation sub-state keeps ticking so stats panels
    *  still receive fresh data. */
@@ -70,6 +75,7 @@ export function AgentCanvas({
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
   bloomEnabled = true, bloomThrottle = 1, minZoomLevel, pauseWhenOffscreen = true,
+  customMainAgentName,
 }: CanvasProps) {
   const manager = useSimulationManager()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -138,6 +144,7 @@ export function AgentCanvas({
     simTime: sim.currentTime, pauseAutoFit, dimensions,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
     onToolCallClick, onDiscoveryClick,
+    customMainAgentName,
     isDragging: false,
   })
 
@@ -162,6 +169,7 @@ export function AgentCanvas({
     p.onContextMenu = onContextMenu
     p.onToolCallClick = onToolCallClick
     p.onDiscoveryClick = onDiscoveryClick
+    p.customMainAgentName = customMainAgentName
   }
 
   // ─── Camera ─────────────────────────────────────────────────────────────
@@ -320,6 +328,7 @@ export function AgentCanvas({
         selectedAgentId, hoveredAgentId, showStats, showHexGrid,
         showCostOverlay, selectedToolCallId, selectedDiscoveryId,
         simTime, pauseAutoFit, dimensions, onAgentDrag,
+        customMainAgentName,
         isDragging,
       } = drawPropsRef.current
       const transform = transformRef.current
@@ -407,7 +416,7 @@ export function AgentCanvas({
         drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current, viewBounds)
         drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, viewBounds)
         drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId, viewBounds)
-        drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
+        drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, customMainAgentName)
         drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
         if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
         drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current, viewBounds)
