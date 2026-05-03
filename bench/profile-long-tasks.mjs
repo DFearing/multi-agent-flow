@@ -3,9 +3,9 @@
  * profile-long-tasks.mjs
  *
  * Single-stack CPU profile + long-task capture for diagnosing what's in
- * the JS main-thread long tasks at 4× CPU throttle.
+ * the JS main-thread long tasks at 4x CPU throttle.
  *
- * Companion to issue #46 direction item 1 ("profile long tasks at 4× throttle").
+ * Companion to issue #46 direction item 1 ("profile long tasks at 4x throttle").
  * The standard run-bench harness reports *that* 80s of every 90s window is
  * blocked in long tasks, but not *what* the work is. This script attaches
  * a CDP CPU profiler during the measurement window so we can attribute
@@ -16,8 +16,13 @@
  *   long-tasks-summary.json          per-long-task entries from PerformanceObserver
  *   long-tasks-report.md             top hot paths by self time + stack views
  *
+ * With --reps=N (N>1), additional outputs:
+ *   long-tasks-summary-rep1.json ... long-tasks-summary-repN.json
+ *   long-tasks-summary.json          aggregated summary with median/mean/stdDev
+ *
  * Usage:
- *   node profile-long-tasks.mjs                # 30s warmup + 90s measurement, 4× throttle
+ *   node profile-long-tasks.mjs                # 30s warmup + 90s measurement, 4x throttle
+ *   node profile-long-tasks.mjs --reps=5       # 5 reps, aggregated with variance stats
  *   node profile-long-tasks.mjs --smoke        # 15s + 30s for quick verify
  *   node profile-long-tasks.mjs --no-throttle  # measure unthrottled (baseline)
  */
@@ -44,6 +49,7 @@ let WARMUP_MS = 30_000
 let MEASURE_MS = 90_000
 let THROTTLE = 4
 let SAMPLE_INTERVAL_US = 1000   // 1ms — high enough for long-task attribution
+let REPS = 1
 
 const args = process.argv.slice(2)
 if (args.includes('--smoke')) { WARMUP_MS = 15_000; MEASURE_MS = 30_000 }
@@ -55,6 +61,8 @@ const measureFlag = args.find(a => a.startsWith('--measure='))
 if (measureFlag) MEASURE_MS = parseInt(measureFlag.split('=')[1], 10) * 1000
 const warmupFlag = args.find(a => a.startsWith('--warmup='))
 if (warmupFlag) WARMUP_MS = parseInt(warmupFlag.split('=')[1], 10) * 1000
+const repsFlag = args.find(a => a.startsWith('--reps='))
+if (repsFlag) REPS = parseInt(repsFlag.split('=')[1], 10)
 const SUFFIX = NO_BLOOM ? '-no-bloom' : (BLOOM_THROTTLE > 1 ? `-throttle${BLOOM_THROTTLE}` : '')
 
 const now = () => new Date().toISOString().slice(11, 19)
@@ -118,6 +126,50 @@ function spawnSim() {
   return proc
 }
 
+// ─── Stats helpers ────────────────────────────────────────────────────────
+
+function median(arr) {
+  if (!arr.length) return 0
+  const s = arr.slice().sort((a, b) => a - b)
+  return s[Math.floor(s.length / 2)]
+}
+
+function mean(arr) {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+}
+
+function stdDev(arr) {
+  if (arr.length < 2) return 0
+  const m = mean(arr)
+  return Math.sqrt(arr.reduce((a, v) => a + (v - m) ** 2, 0) / (arr.length - 1))
+}
+
+function statBlock(arr) {
+  return {
+    median: median(arr),
+    mean: mean(arr),
+    min: Math.min(...arr),
+    max: Math.max(...arr),
+    stdDev: stdDev(arr),
+    values: arr,
+  }
+}
+
+// ─── System state snapshot ────────────────────────────────────────────────
+
+function readSystemState() {
+  const cpuModel = os.cpus()[0]?.model ?? 'unknown'
+  const loadavg1m = os.loadavg()[0]
+  const freeMemMB = Math.round(os.freemem() / (1024 * 1024))
+
+  let governor = 'unknown'
+  try {
+    governor = fs.readFileSync('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor', 'utf8').trim()
+  } catch {}
+
+  return { cpuModel, governor, loadavg1m, freeMemMB }
+}
+
 // ─── CPU-profile parser ────────────────────────────────────────────────────
 //
 // V8 CPU profile shape:
@@ -132,7 +184,7 @@ function spawnSim() {
 //
 // For a "what's in the long tasks" report we want:
 //   - Top N functions by self time (where time is actually being spent)
-//   - For each, the dominant call-stack chain leading to it (parent→child)
+//   - For each, the dominant call-stack chain leading to it (parent->child)
 
 function parseCpuProfile(profile) {
   const { nodes, samples, timeDeltas } = profile
@@ -215,11 +267,18 @@ function writeReport(parsed, longTasks, meta) {
   lines.push(`# Long-task profile — ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`)
   lines.push('')
   lines.push(`- Stack: HEAD (\`${meta.commit}\`)`)
-  lines.push(`- CPU throttle: ${meta.throttle}×`)
+  lines.push(`- CPU throttle: ${meta.throttle}x`)
   lines.push(`- Warmup: ${meta.warmupMs / 1000}s · Measurement: ${meta.measureMs / 1000}s`)
   lines.push(`- Sim: \`concurrent\` scenario, ${SIM_COUNT} sessions`)
   lines.push(`- CPU profile sampling interval: ${SAMPLE_INTERVAL_US}us`)
   lines.push(`- Total profiled CPU time: ${fmtSec(totalUs)}`)
+  if (meta.rep != null) {
+    lines.push(`- Rep: ${meta.rep} of ${meta.totalReps} (best FPS — used for profile attribution)`)
+  }
+  if (meta.system) {
+    const s = meta.system
+    lines.push(`- System: ${s.cpuModel}, governor=${s.governor}, load=${s.loadavg1m.toFixed(2)}, free=${s.freeMemMB}MB`)
+  }
   lines.push('')
   lines.push(`## Long tasks observed (PerformanceObserver, main thread)`)
   lines.push('')
@@ -245,7 +304,7 @@ function writeReport(parsed, longTasks, meta) {
         rows.push(`| ${prev}–${buckets[i]}ms | ${counts[i]} |`)
         prev = buckets[i]
       }
-      rows.push(`| ≥${buckets[buckets.length - 1]}ms | ${over} |`)
+      rows.push(`| >=${buckets[buckets.length - 1]}ms | ${over} |`)
       return rows
     })()
     lines.push(`- Count: **${longTasks.length}**, total blocking: **${(total / 1000).toFixed(1)}s**, longest: **${max.toFixed(0)}ms**`)
@@ -273,7 +332,7 @@ function writeReport(parsed, longTasks, meta) {
     lines.push('')
     lines.push('```')
     for (let j = 0; j < s.chain.length; j++) {
-      lines.push('  '.repeat(j) + '↳ ' + s.chain[j])
+      lines.push('  '.repeat(j) + '-> ' + s.chain[j])
     }
     lines.push('```')
     lines.push('')
@@ -289,16 +348,22 @@ async function run() {
     process.exit(2)
   }
   fs.mkdirSync(RESULTS_DIR, { recursive: true })
-  rmrf(encodedWorkspaceDir(BENCH_WS))
-  rmrf(path.join(BENCH_WS, '.sim-sessions'))
-  fs.mkdirSync(BENCH_WS, { recursive: true })
 
   const commit = (() => {
     try { return execSync('git rev-parse --short HEAD', { cwd: REPO_ROOT }).toString().trim() }
     catch { return 'unknown' }
   })()
 
-  log(`config: throttle=${THROTTLE}× warmup=${WARMUP_MS}ms measure=${MEASURE_MS}ms commit=${commit}`)
+  const systemState = readSystemState()
+
+  log(`config: throttle=${THROTTLE}x warmup=${WARMUP_MS}ms measure=${MEASURE_MS}ms reps=${REPS} commit=${commit}`)
+  log(`system: cpu="${systemState.cpuModel}" governor=${systemState.governor} load=${systemState.loadavg1m.toFixed(2)} free=${systemState.freeMemMB}MB`)
+
+  // Clean workspace
+  rmrf(encodedWorkspaceDir(BENCH_WS))
+  rmrf(path.join(BENCH_WS, '.sim-sessions'))
+  fs.mkdirSync(BENCH_WS, { recursive: true })
+
   log(`booting app on :${PORT}`)
   const app = spawnApp()
   await waitForServer(`http://127.0.0.1:${PORT}/`)
@@ -317,7 +382,9 @@ async function run() {
     ],
   })
 
-  let report = null
+  /** @type {Array<{summary: object, longTasks: object[], profile: object}>} */
+  const repResults = []
+
   try {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 })
     await ctx.addInitScript({ path: INSTRUMENTATION_PATH })
@@ -336,12 +403,8 @@ async function run() {
 
     await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' })
 
-    // Reveal sim sessions. The visualizer hides new workspaces by default;
-    // the top-bar button reads "Workspaces" (none) or "Workspaces (V/T)"
-    // when at least one workspace is known. We poll for the V/T form (so
-    // we know the sim has produced events the UI knows about), then click
-    // "show all" inside the popover.
-    log('waiting for sim sessions to appear in UI…')
+    // Reveal sim sessions
+    log('waiting for sim sessions to appear in UI...')
     try {
       const wsButton = page.getByText(/Workspaces \(\d+\/\d+\)/).first()
       await wsButton.waitFor({ state: 'visible', timeout: 20_000 })
@@ -356,61 +419,78 @@ async function run() {
       throw new Error(`failed to reveal workspaces: ${e.message}`)
     }
 
-    log(`warming up for ${WARMUP_MS / 1000}s`)
-    await sleep(WARMUP_MS)
+    // ─── Rep loop ──────────────────────────────────────────────────────
+    for (let rep = 1; rep <= REPS; rep++) {
+      log(`── rep ${rep}/${REPS} ──`)
+      log(`warming up for ${WARMUP_MS / 1000}s`)
+      await sleep(WARMUP_MS)
 
-    const diag = await page.evaluate(() => ({
-      canvases: document.querySelectorAll('canvas').length,
-      heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) : 0,
-    }))
-    log(`diag: canvases=${diag.canvases} heap=${diag.heap}MB`)
-    if (diag.canvases === 0) throw new Error('no canvases mounted — sim/workspace setup failed')
+      const diag = await page.evaluate(() => ({
+        canvases: document.querySelectorAll('canvas').length,
+        heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) : 0,
+      }))
+      log(`diag: canvases=${diag.canvases} heap=${diag.heap}MB`)
+      if (diag.canvases === 0) throw new Error('no canvases mounted — sim/workspace setup failed')
 
-    if (THROTTLE > 1) {
-      log(`applying ${THROTTLE}× CPU throttle`)
-      await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE })
+      if (THROTTLE > 1) {
+        log(`applying ${THROTTLE}x CPU throttle`)
+        await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE })
+      }
+
+      log('starting CPU profiler + bench instrumentation')
+      await cdp.send('Profiler.enable')
+      await cdp.send('Profiler.setSamplingInterval', { interval: SAMPLE_INTERVAL_US })
+      await cdp.send('Profiler.start')
+      await cdp.send('Performance.enable').catch(() => {})
+      const perfBefore = await cdp.send('Performance.getMetrics').catch(() => ({ metrics: [] }))
+      await page.evaluate(() => window.__bench.start())
+
+      log(`measuring for ${MEASURE_MS / 1000}s`)
+      await sleep(MEASURE_MS)
+
+      log('stopping profiler')
+      const { profile } = await cdp.send('Profiler.stop')
+      const summary = await page.evaluate(() => {
+        window.__bench.stop()
+        return { summary: window.__bench.summary(), longTasks: window.__bench.raw().longTasks }
+      })
+      const perfAfter = await cdp.send('Performance.getMetrics').catch(() => ({ metrics: [] }))
+
+      if (THROTTLE > 1) await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+      await cdp.send('Profiler.disable')
+
+      // Extract CDP scripting duration (seconds -> ms)
+      const cdpMetric = (name) => {
+        const a = (perfAfter.metrics || []).find(m => m.name === name)?.value ?? 0
+        const b = (perfBefore.metrics || []).find(m => m.name === name)?.value ?? 0
+        return a - b
+      }
+      const scriptingMs = cdpMetric('ScriptDuration') * 1000
+
+      log(`rep ${rep}: fps=${summary.summary.fpsMean.toFixed(1)} longTasks=${summary.summary.longTasks.count}/${Math.round(summary.summary.longTasks.totalMs)}ms`)
+
+      repResults.push({
+        summary: summary.summary,
+        longTasks: summary.longTasks,
+        profile,
+        scriptingMs,
+      })
+
+      // Write per-rep summary
+      const repSummaryPath = path.join(RESULTS_DIR, `long-tasks-summary${SUFFIX}-rep${rep}.json`)
+      fs.writeFileSync(repSummaryPath, JSON.stringify({
+        meta: { commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS, simCount: SIM_COUNT, bloom: !NO_BLOOM, bloomThrottle: BLOOM_THROTTLE, rep, totalReps: REPS },
+        system: systemState,
+        bench: summary.summary,
+      }, null, 2))
+      log(`wrote ${repSummaryPath}`)
+
+      // Brief settle between reps (except after last)
+      if (rep < REPS) {
+        log('settling 3s before next rep...')
+        await sleep(3000)
+      }
     }
-
-    log('starting CPU profiler + bench instrumentation')
-    await cdp.send('Profiler.enable')
-    await cdp.send('Profiler.setSamplingInterval', { interval: SAMPLE_INTERVAL_US })
-    await cdp.send('Profiler.start')
-    await page.evaluate(() => window.__bench.start())
-
-    log(`measuring for ${MEASURE_MS / 1000}s`)
-    await sleep(MEASURE_MS)
-
-    log('stopping profiler')
-    const { profile } = await cdp.send('Profiler.stop')
-    const summary = await page.evaluate(() => {
-      window.__bench.stop()
-      return { summary: window.__bench.summary(), longTasks: window.__bench.raw().longTasks }
-    })
-
-    if (THROTTLE > 1) await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
-
-    log(`fps=${summary.summary.fpsMean.toFixed(1)} longTasks=${summary.summary.longTasks.count}/${Math.round(summary.summary.longTasks.totalMs)}ms`)
-
-    // Write raw cpuprofile (DevTools-loadable) and our parsed report.
-    const cpuPath = path.join(RESULTS_DIR, `long-tasks-profile${SUFFIX}.cpuprofile`)
-    fs.writeFileSync(cpuPath, JSON.stringify(profile))
-    log(`wrote ${cpuPath} (${(fs.statSync(cpuPath).size / 1e6).toFixed(1)} MB)`)
-
-    const summaryPath = path.join(RESULTS_DIR, `long-tasks-summary${SUFFIX}.json`)
-    fs.writeFileSync(summaryPath, JSON.stringify({
-      meta: { commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS, simCount: SIM_COUNT, bloom: !NO_BLOOM, bloomThrottle: BLOOM_THROTTLE },
-      bench: summary.summary,
-    }, null, 2))
-    log(`wrote ${summaryPath}`)
-
-    log('parsing CPU profile')
-    const parsed = parseCpuProfile(profile)
-    report = writeReport(parsed, summary.longTasks, {
-      commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS,
-    })
-    const reportPath = path.join(RESULTS_DIR, `long-tasks-report${SUFFIX}.md`)
-    fs.writeFileSync(reportPath, report)
-    log(`wrote ${reportPath}`)
 
     await page.close()
     await ctx.close()
@@ -422,6 +502,158 @@ async function run() {
     rmrf(path.join(BENCH_WS, '.sim-sessions'))
   }
 
+  // ─── Post-processing ────────────────────────────────────────────────────
+
+  // Find best rep (highest FPS) for profile attribution
+  let bestIdx = 0
+  for (let i = 1; i < repResults.length; i++) {
+    if (repResults[i].summary.fpsMean > repResults[bestIdx].summary.fpsMean) {
+      bestIdx = i
+    }
+  }
+
+  const bestRep = repResults[bestIdx]
+
+  // Write CPU profile for best rep only
+  const cpuPath = path.join(RESULTS_DIR, `long-tasks-profile${SUFFIX}.cpuprofile`)
+  fs.writeFileSync(cpuPath, JSON.stringify(bestRep.profile))
+  log(`wrote ${cpuPath} (${(fs.statSync(cpuPath).size / 1e6).toFixed(1)} MB) — from rep ${bestIdx + 1} (best FPS)`)
+
+  // Parse and write report from best rep
+  log('parsing CPU profile (best rep)')
+  const parsed = parseCpuProfile(bestRep.profile)
+  const report = writeReport(parsed, bestRep.longTasks, {
+    commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS,
+    rep: bestIdx + 1, totalReps: REPS, system: systemState,
+  })
+  const reportPath = path.join(RESULTS_DIR, `long-tasks-report${SUFFIX}.md`)
+  fs.writeFileSync(reportPath, report)
+  log(`wrote ${reportPath}`)
+
+  // ─── Aggregated summary ─────────────────────────────────────────────────
+
+  // Extract per-rep metric arrays
+  const fpsArr = repResults.map(r => r.summary.fpsMean)
+  const frameMeanArr = repResults.map(r => r.summary.frameMs.mean)
+  const frameP50Arr = repResults.map(r => r.summary.frameMs.p50)
+  const frameP95Arr = repResults.map(r => r.summary.frameMs.p95)
+  const frameP99Arr = repResults.map(r => r.summary.frameMs.p99)
+  const ltTotalArr = repResults.map(r => r.summary.longTasks.totalMs)
+  const ltCountArr = repResults.map(r => r.summary.longTasks.count)
+  const ltMaxArr = repResults.map(r => r.summary.longTasks.maxMs)
+  const reactCommitsArr = repResults.map(r => r.summary.reactCommits)
+  const scriptingMsArr = repResults.map(r => r.scriptingMs)
+
+  const fpsCov = fpsArr.length > 1 ? stdDev(fpsArr) / mean(fpsArr) : 0
+  const noisy = fpsCov > 0.15
+
+  const aggregated = {
+    meta: {
+      commit,
+      throttle: THROTTLE,
+      warmupMs: WARMUP_MS,
+      measureMs: MEASURE_MS,
+      simCount: SIM_COUNT,
+      bloom: !NO_BLOOM,
+      bloomThrottle: BLOOM_THROTTLE,
+      reps: REPS,
+      bestRep: bestIdx + 1,
+    },
+    system: systemState,
+    variance: {
+      cov: fpsCov,
+      noisy,
+    },
+    fps: statBlock(fpsArr),
+    frameMs: {
+      mean: statBlock(frameMeanArr),
+      p50: statBlock(frameP50Arr),
+      p95: statBlock(frameP95Arr),
+      p99: statBlock(frameP99Arr),
+    },
+    longTasks: {
+      totalMs: statBlock(ltTotalArr),
+      count: statBlock(ltCountArr),
+      maxMs: statBlock(ltMaxArr),
+    },
+    reactCommits: statBlock(reactCommitsArr),
+    scriptingMs: statBlock(scriptingMsArr),
+  }
+
+  // For backward compat with single-rep: if REPS === 1, also write the flat
+  // bench object at the top level so existing consumers are unaffected.
+  let summaryJson
+  if (REPS === 1) {
+    summaryJson = {
+      meta: { commit, throttle: THROTTLE, warmupMs: WARMUP_MS, measureMs: MEASURE_MS, simCount: SIM_COUNT, bloom: !NO_BLOOM, bloomThrottle: BLOOM_THROTTLE },
+      system: systemState,
+      bench: repResults[0].summary,
+    }
+  } else {
+    summaryJson = aggregated
+  }
+
+  const summaryPath = path.join(RESULTS_DIR, `long-tasks-summary${SUFFIX}.json`)
+  fs.writeFileSync(summaryPath, JSON.stringify(summaryJson, null, 2))
+  log(`wrote ${summaryPath}`)
+
+  // ─── Terminal output ────────────────────────────────────────────────────
+
+  console.log('')
+  console.log('═══════════════════════════════════════════════════════════')
+  console.log('  RESULTS')
+  console.log('═══════════════════════════════════════════════════════════')
+
+  if (REPS > 1) {
+    console.log(`  Reps: ${REPS}   Best rep: ${bestIdx + 1}`)
+    console.log('')
+    console.log(`  FPS:`)
+    console.log(`    median = ${aggregated.fps.median.toFixed(1)}`)
+    console.log(`    mean   = ${aggregated.fps.mean.toFixed(1)}`)
+    console.log(`    min    = ${aggregated.fps.min.toFixed(1)}`)
+    console.log(`    max    = ${aggregated.fps.max.toFixed(1)}`)
+    console.log(`    stdDev = ${aggregated.fps.stdDev.toFixed(2)}`)
+    console.log(`    CoV    = ${(fpsCov * 100).toFixed(1)}%`)
+    console.log('')
+    console.log(`  Frame p95 ms:`)
+    console.log(`    median = ${aggregated.frameMs.p95.median.toFixed(1)}`)
+    console.log(`    min    = ${aggregated.frameMs.p95.min.toFixed(1)}`)
+    console.log(`    max    = ${aggregated.frameMs.p95.max.toFixed(1)}`)
+    console.log('')
+    console.log(`  Long-task total ms:`)
+    console.log(`    median = ${aggregated.longTasks.totalMs.median.toFixed(0)}`)
+    console.log(`    min    = ${aggregated.longTasks.totalMs.min.toFixed(0)}`)
+    console.log(`    max    = ${aggregated.longTasks.totalMs.max.toFixed(0)}`)
+    console.log('')
+    console.log(`  React commits:`)
+    console.log(`    median = ${aggregated.reactCommits.median.toFixed(0)}`)
+    console.log('')
+
+    // Per-rep one-liner table
+    console.log('  Per-rep:')
+    console.log('    rep | FPS    | frame p95 | LT total | commits')
+    console.log('    ----|--------|-----------|----------|--------')
+    for (let i = 0; i < repResults.length; i++) {
+      const r = repResults[i].summary
+      const marker = i === bestIdx ? ' *' : ''
+      console.log(`    ${String(i + 1).padStart(3)} | ${r.fpsMean.toFixed(1).padStart(6)} | ${r.frameMs.p95.toFixed(1).padStart(9)} | ${Math.round(r.longTasks.totalMs).toString().padStart(8)} | ${r.reactCommits.toString().padStart(6)}${marker}`)
+    }
+    console.log('    (* = best rep, used for CPU profile)')
+    console.log('')
+  } else {
+    const r = repResults[0].summary
+    console.log(`  fps=${r.fpsMean.toFixed(1)} longTasks=${r.longTasks.count}/${Math.round(r.longTasks.totalMs)}ms`)
+    console.log('')
+  }
+
+  if (noisy) {
+    console.log(`  ⚠ HIGH VARIANCE — CoV=${(fpsCov * 100).toFixed(1)}% (threshold: 15%)`)
+    console.log(`  System load may be interfering. Consider closing other apps and rerunning.`)
+    console.log(`  Tip: run bench/scripts/bench-prep.sh --set-performance before benchmarking.`)
+    console.log('')
+  }
+
+  console.log('═══════════════════════════════════════════════════════════')
   log('done')
 }
 
