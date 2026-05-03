@@ -10,6 +10,7 @@ import {
   overlayCacheSize,
   _resetOverlayCacheForTest,
   _insertOverlayStubForTest,
+  _wouldHitOverlayCacheForTest,
 } from './render-cache'
 
 // ─── overlayKey ─────────────────────────────────────────────────────────────
@@ -113,5 +114,113 @@ describe('pruneOverlayCache', () => {
 
     pruneOverlayCache(active)
     expect(overlayCacheSize()).toBe(20) // 10 agents * 2 overlays each
+  })
+})
+
+// ─── Overlay cache hit-rate regression ────────────────────────────────────
+// Verifies that the quantized dataHash scheme produces cache HITs when the
+// underlying values change by less than the visible quantum (PR #63 fix).
+
+describe('overlay cache hit rate (quantization regression)', () => {
+  beforeEach(() => {
+    _resetOverlayCacheForTest()
+  })
+
+  /**
+   * Simulate the stats overlay dataHash construction from draw-agents.ts:
+   *   const timeSec = Math.floor(agent.timeAlive)
+   *   const statsText = `${agent.toolCalls} tools · ${timeSec}s`
+   *   const dataHash = `stats|${statsText}`
+   */
+  function statsDataHash(toolCalls: number, timeAlive: number): string {
+    const timeSec = Math.floor(timeAlive)
+    return `stats|${toolCalls} tools · ${timeSec}s`
+  }
+
+  /**
+   * Simulate the cost overlay dataHash construction from draw-cost.ts:
+   *   const label = `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
+   *   toolHash quantized to nearest 1000 tokens
+   *   const dataHash = `cost|${label}|${toolHash}`
+   */
+  function costDataHash(cost: number, toolTokens: Map<string, number>): string {
+    const label = `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
+    const toolHash = Array.from(toolTokens.entries())
+      .map(([n, t]) => `${n}:${Math.round(t / 1000)}`)
+      .join(',')
+    return `cost|${label}|${toolHash}`
+  }
+
+  it('stats overlay HITs when timeAlive changes sub-second (e.g. 12.34 → 12.78)', () => {
+    const agentId = 'agent-1'
+    const key = overlayKey('stats', agentId)
+    const hash1 = statsDataHash(5, 12.34)
+    _insertOverlayStubForTest(key, hash1)
+
+    // Sub-second change: 12.34 → 12.78 (same integer second)
+    const hash2 = statsDataHash(5, 12.78)
+    expect(hash1).toBe(hash2) // hashes must be identical
+    expect(_wouldHitOverlayCacheForTest(key, hash2)).toBe(true)
+  })
+
+  it('stats overlay MISSES when timeAlive crosses a second boundary (12.9 → 13.1)', () => {
+    const agentId = 'agent-1'
+    const key = overlayKey('stats', agentId)
+    const hash1 = statsDataHash(5, 12.9)
+    _insertOverlayStubForTest(key, hash1)
+
+    const hash2 = statsDataHash(5, 13.1)
+    expect(hash1).not.toBe(hash2)
+    expect(_wouldHitOverlayCacheForTest(key, hash2)).toBe(false)
+  })
+
+  it('stats overlay MISSES when toolCalls changes', () => {
+    const agentId = 'agent-1'
+    const key = overlayKey('stats', agentId)
+    const hash1 = statsDataHash(5, 20.5)
+    _insertOverlayStubForTest(key, hash1)
+
+    const hash2 = statsDataHash(6, 20.5)
+    expect(_wouldHitOverlayCacheForTest(key, hash2)).toBe(false)
+  })
+
+  it('cost overlay HITs when tool tokens change by less than 1000', () => {
+    const agentId = 'agent-1'
+    const key = overlayKey('cost', agentId)
+    // 5100 / 1000 = 5.1 → rounds to 5;  5400 / 1000 = 5.4 → rounds to 5
+    const tools1 = new Map([['Read', 5100], ['Bash', 3000]])
+    const hash1 = costDataHash(0.05, tools1)
+    _insertOverlayStubForTest(key, hash1)
+
+    // Sub-quantum change: +300 tokens to Read (5100 → 5400), still rounds to 5
+    const tools2 = new Map([['Read', 5400], ['Bash', 3000]])
+    const hash2 = costDataHash(0.05, tools2)
+    expect(hash1).toBe(hash2)
+    expect(_wouldHitOverlayCacheForTest(key, hash2)).toBe(true)
+  })
+
+  it('cost overlay MISSES when tool tokens cross a 1000-token boundary', () => {
+    const agentId = 'agent-1'
+    const key = overlayKey('cost', agentId)
+    const tools1 = new Map([['Read', 4800]])
+    const hash1 = costDataHash(0.05, tools1)
+    _insertOverlayStubForTest(key, hash1)
+
+    // Cross the 5000 boundary: 4800 rounds to 5, 5500 rounds to 6
+    const tools2 = new Map([['Read', 5500]])
+    const hash2 = costDataHash(0.05, tools2)
+    expect(hash1).not.toBe(hash2)
+    expect(_wouldHitOverlayCacheForTest(key, hash2)).toBe(false)
+  })
+
+  it('cost overlay MISSES when the formatted cost label changes', () => {
+    const agentId = 'agent-1'
+    const key = overlayKey('cost', agentId)
+    const tools = new Map([['Read', 5000]])
+    const hash1 = costDataHash(0.043, tools)
+    _insertOverlayStubForTest(key, hash1)
+
+    const hash2 = costDataHash(0.044, tools)
+    expect(_wouldHitOverlayCacheForTest(key, hash2)).toBe(false)
   })
 })

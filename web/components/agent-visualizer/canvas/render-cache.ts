@@ -150,6 +150,20 @@ let textSpriteAccessCounter = 0
  *                If DPR changes at runtime (e.g. window moved between monitors),
  *                new sprites are created at the new DPR; stale ones evict via LRU.
  */
+/** Shared 1x1 canvas for text measurement — avoids creating a new canvas +
+ *  getContext call on every text sprite cache miss. */
+let _measureCanvas: HTMLCanvasElement | null = null
+let _measureCtx: CanvasRenderingContext2D | null = null
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (!_measureCtx) {
+    _measureCanvas = document.createElement('canvas')
+    _measureCanvas.width = 1
+    _measureCanvas.height = 1
+    _measureCtx = _measureCanvas.getContext('2d')!
+  }
+  return _measureCtx
+}
+
 export function getTextSprite(
   text: string,
   font: string,
@@ -166,10 +180,7 @@ export function getTextSprite(
   }
 
   // Measure text to determine canvas size
-  const measure = document.createElement('canvas')
-  measure.width = 1
-  measure.height = 1
-  const mCtx = measure.getContext('2d')!
+  const mCtx = getMeasureCtx()
   mCtx.font = font
   const metrics = mCtx.measureText(text)
 
@@ -288,6 +299,8 @@ function agentIdFromOverlayKey(key: string): string | undefined {
 
 interface OverlaySprite {
   canvas: HTMLCanvasElement
+  /** Cached 2d context — avoids repeated getContext() calls on re-render */
+  ctx: CanvasRenderingContext2D | null
   /** Logical width */
   width: number
   /** Logical height */
@@ -334,14 +347,16 @@ export function getOverlaySprite(
     canvas.height = pxH
   }
 
-  const ctx = canvas.getContext('2d')!
+  // Reuse cached context when the canvas is reused — avoids a getContext()
+  // call on every cache miss (which the V8 builtin makes surprisingly costly).
+  const ctx = existing?.ctx ?? canvas.getContext('2d')!
   ctx.clearRect(0, 0, pxW, pxH)
   ctx.save()
   ctx.scale(dpr, dpr)
   render(ctx)
   ctx.restore()
 
-  const sprite: OverlaySprite = { canvas, width, height, dpr, dataHash }
+  const sprite: OverlaySprite = { canvas, ctx, width, height, dpr, dataHash }
   overlayCache.set(cacheKey, sprite)
   return sprite
 }
@@ -386,12 +401,20 @@ export function _resetOverlayCacheForTest(): void {
 
 /** Insert a stub overlay entry by key. Exposed for testing only — avoids
  *  needing a real Canvas2D context in jsdom. */
-export function _insertOverlayStubForTest(key: string): void {
+export function _insertOverlayStubForTest(key: string, dataHash = ''): void {
   overlayCache.set(key, {
     canvas: null as unknown as HTMLCanvasElement,
+    ctx: null,
     width: 0,
     height: 0,
     dpr: 1,
-    dataHash: '',
+    dataHash,
   })
+}
+
+/** Check whether a given (cacheKey, dataHash) pair would be a cache HIT.
+ *  Exposed for testing only. */
+export function _wouldHitOverlayCacheForTest(key: string, dataHash: string): boolean {
+  const existing = overlayCache.get(key)
+  return existing !== undefined && existing.dataHash === dataHash
 }
