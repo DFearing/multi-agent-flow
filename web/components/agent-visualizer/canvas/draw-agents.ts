@@ -132,6 +132,7 @@ export function drawContextComposition(
   ctx: CanvasRenderingContext2D,
   agent: Agent,
   radius: number,
+  extendedLayout: boolean,
 ) {
   const bd = agent.contextBreakdown
   const total = agent.tokensUsed
@@ -140,7 +141,7 @@ export function drawContextComposition(
   const barWidth = Math.max(CONTEXT_BAR.minWidth, radius * CONTEXT_BAR.widthMultiplier)
   const barHeight = CONTEXT_BAR.barHeight
   const barX = agent.x - barWidth / 2
-  const barY = agent.y + radius + CONTEXT_BAR.yOffset
+  const barY = agent.y + radius + (extendedLayout ? CONTEXT_BAR.yOffsetWithSubtitle : CONTEXT_BAR.yOffset)
 
   // Background
   ctx.fillStyle = COLORS.cardBgDark
@@ -377,14 +378,30 @@ function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: numb
   }
 }
 
-function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean) {
+function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean, customMainAgentName: string | undefined) {
   const labelFont = '10px monospace'
   const labelColor = isHovered ? COLORS.textPrimary : COLORS.textDim
   ctx.font = labelFont // needed for truncateText measurement
   const maxLabelW = r * AGENT_DRAW.labelWidthMultiplier
+  const labelY = agent.y + r + AGENT_DRAW.labelYOffset
+
+  if (agent.isMain) {
+    const customName = (customMainAgentName ?? '').trim()
+    const isCustom = customName.length > 0 && customName.toLowerCase() !== 'orchestrator'
+    const primary = truncateText(ctx, isCustom ? customName : 'Orchestrator', maxLabelW)
+    const primarySprite = getTextSprite(primary, labelFont, labelColor, 'center', 'top')
+    drawTextSprite(ctx, primarySprite, agent.x, labelY, 'center', 'top')
+    if (isCustom) {
+      const subtitleFont = '8px monospace'
+      const subtitleSprite = getTextSprite('Orchestrator', subtitleFont, COLORS.textMuted, 'center', 'top')
+      drawTextSprite(ctx, subtitleSprite, agent.x, labelY + 12, 'center', 'top')
+    }
+    return
+  }
+
   const agentLabel = truncateText(ctx, agent.name, maxLabelW)
   const labelSprite = getTextSprite(agentLabel, labelFont, labelColor, 'center', 'top')
-  drawTextSprite(ctx, labelSprite, agent.x, agent.y + r + AGENT_DRAW.labelYOffset, 'center', 'top')
+  drawTextSprite(ctx, labelSprite, agent.x, labelY, 'center', 'top')
 }
 
 function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
@@ -427,7 +444,10 @@ export function drawAgents(
   hoveredAgentId: string | null,
   showStats: boolean,
   time: number,
+  customMainAgentName: string | undefined,
 ) {
+  const customNameTrimmed = (customMainAgentName ?? '').trim()
+  const isCustom = customNameTrimmed.length > 0 && customNameTrimmed.toLowerCase() !== 'orchestrator'
   for (const [id, agent] of agents) {
     const radius = agent.isMain ? NODE.radiusMain : NODE.radiusSub
     const color = getStateColor(agent.state)
@@ -461,14 +481,14 @@ export function drawAgents(
       drawWaitingRipples(ctx, agent, r, color, time)
     }
 
-    drawAgentLabel(ctx, agent, r, isHovered)
+    drawAgentLabel(ctx, agent, r, isHovered, customMainAgentName)
 
     // Context composition — ring for main agent, bar for sub-agents
     if (agent.state !== 'complete' || agent.opacity > 0.5) {
       if (agent.isMain) {
         drawContextRing(ctx, agent, r, time)
       }
-      drawContextComposition(ctx, agent, r)
+      drawContextComposition(ctx, agent, r, agent.isMain && isCustom)
     }
 
     if (showStats && agent.state !== 'complete') {

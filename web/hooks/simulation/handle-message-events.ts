@@ -1,6 +1,6 @@
 import type { ContextBreakdown } from '@/lib/agent-types'
 import type { ConversationMessage } from './types'
-import { appendConversation, asString, asNumber, LABEL_LEN_NAME, LABEL_LEN_TASK, LABEL_LEN_BUBBLE, MAX_BUBBLES } from './types'
+import { appendConversation, asString, asNumber, LABEL_LEN_BUBBLE, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
 
 export function handleMessage(
@@ -17,15 +17,6 @@ export function handleMessage(
     role === 'user' ? 'user' :
     role === 'thinking' ? 'thinking' :
     'assistant'
-
-  // Rename main agent to the first user message (more recognizable than "orchestrator")
-  if (role === 'user') {
-    const msgAgentForName = state.agents.get(agentName)
-    if (msgAgentForName && msgAgentForName.isMain && msgAgentForName.name === agentName) {
-      const shortName = content.slice(0, LABEL_LEN_NAME).replace(/\n/g, ' ').trim()
-      state.agents.set(agentName, { ...msgAgentForName, name: shortName || agentName, task: content.slice(0, LABEL_LEN_TASK) })
-    }
-  }
 
   // Update agent state and push message bubble to queue
   const msgAgent = state.agents.get(agentName)
