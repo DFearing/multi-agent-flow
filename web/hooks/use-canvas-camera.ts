@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
-import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
+import { Agent, ToolCallNode, Discovery, ANIM, NODE, isActiveAgentState } from '@/lib/agent-types'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
 /** Extra padding added to agent node radii for auto-fit bounding box */
@@ -64,15 +64,25 @@ export function useCanvasCamera({
   const panVelocityRef = useRef({ vx: 0, vy: 0, active: false })
 
   // Cache for computeFitTransform — avoids O(n) iteration every frame.
-  // Invalidates on collection reference change (React creates new Map/array on state updates).
+  // Invariant: cache is valid iff every input that influences the result is
+  // unchanged. Reference equality is used for collections (the simulation
+  // allocates a new Map on most state-changing events; see process-event.ts
+  // CLONE_PLAN). The `anchorAgentId` field is the SAFETY NET: it captures the
+  // agent the previous result was anchored on, so if that agent's role
+  // changes (orchestrator becomes active, or a new sub-agent picks up work)
+  // mid-frame WITHOUT the agents-Map reference flipping, we still invalidate.
+  // Without this, a stale anchor could persist across the orchestrator-idle
+  // → orchestrator-active handoff. The pre-pass cost is minimal — agent state
+  // is read inline alongside the eventual bounding-box pass on cache miss.
   const fitCacheRef = useRef<{
     agents: Map<string, Agent> | null
     toolCalls: Map<string, ToolCallNode> | null
     discoveries: Discovery[] | null
     selectedAgentId: string | null
     minZoom: number
+    anchorAgentId: string | null
     result: Transform | null
-  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, minZoom: 0, result: null })
+  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, minZoom: 0, anchorAgentId: null, result: null })
 
   // Initialize transform centered on first agents
   useEffect(() => {
@@ -101,17 +111,6 @@ export function useCanvasCamera({
     const { agents, toolCalls, discoveries, dimensions, selectedAgentId } = drawPropsRef.current
     if (agents.size === 0) return null
 
-    // Return cached result if inputs haven't changed (reference equality —
-    // React creates new Map/array objects on state updates, so same ref = same data)
-    const cache = fitCacheRef.current
-    if (cache.agents === agents
-      && cache.toolCalls === toolCalls
-      && cache.discoveries === discoveries
-      && cache.selectedAgentId === selectedAgentId
-      && cache.minZoom === minZoomRef.current) {
-      return cache.result
-    }
-
     // Determine focus scope: if a non-main agent is selected, focus on it + descendants
     let focusScope: Set<string> | null = null
     if (selectedAgentId) {
@@ -119,6 +118,66 @@ export function useCanvasCamera({
       if (selected && !selected.isMain) {
         focusScope = getDescendantIds(agents, selectedAgentId)
       }
+    }
+
+    // Pre-pass: pick the auto-fit anchor agent.
+    // Priority:
+    //   - When focusScope is set (user explicitly selected a sub-agent), the
+    //     existing rule wins: anchor on main if present, else first agent.
+    //     User-explicit selection trumps the automatic active-handoff logic.
+    //   - When focusScope is null (no selection or main selected), apply the
+    //     orchestrator-idle handoff:
+    //       1. isMain in an active state          → anchor on main
+    //       2. else any sub in an active state    → anchor on first by
+    //                                                iteration order (matches
+    //                                                the activeAgentPos
+    //                                                precedent in canvas.tsx
+    //                                                — same predicate, same
+    //                                                tie-break)
+    //       3. else                               → main if present, else
+    //                                                first agent (legacy
+    //                                                fallback)
+    // Computed in its own pass (rather than folded into the bounding-box
+    // loop) so the cache key can include the resulting anchor id and
+    // invalidate when the active-anchor decision changes.
+    let mainAgent: Agent | null = null
+    let firstAgent: Agent | null = null
+    let firstActiveSub: Agent | null = null
+    let mainActive = false
+    for (const [id, agent] of agents) {
+      if (focusScope && !focusScope.has(id)) continue
+      if (firstAgent === null) firstAgent = agent
+      if (agent.isMain) {
+        mainAgent = agent
+        if (isActiveAgentState(agent.state)) mainActive = true
+      } else if (firstActiveSub === null && isActiveAgentState(agent.state)) {
+        firstActiveSub = agent
+      }
+    }
+    let anchorAgent: Agent | null
+    if (focusScope !== null) {
+      // Preserve the legacy focus-scope behavior: main-if-in-scope, else first.
+      anchorAgent = mainAgent ?? firstAgent
+    } else if (mainActive) {
+      anchorAgent = mainAgent
+    } else if (firstActiveSub !== null) {
+      anchorAgent = firstActiveSub
+    } else {
+      anchorAgent = mainAgent ?? firstAgent
+    }
+    const anchorAgentId = anchorAgent?.id ?? null
+
+    // Return cached result if inputs haven't changed. The anchorAgentId field
+    // catches the case where the anchor decision flips (e.g. orchestrator
+    // transitions idle → active) without a Map-reference change.
+    const cache = fitCacheRef.current
+    if (cache.agents === agents
+      && cache.toolCalls === toolCalls
+      && cache.discoveries === discoveries
+      && cache.selectedAgentId === selectedAgentId
+      && cache.minZoom === minZoomRef.current
+      && cache.anchorAgentId === anchorAgentId) {
+      return cache.result
     }
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
@@ -165,7 +224,7 @@ export function useCanvasCamera({
       }
     }
     if (minX === Infinity) {
-      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, minZoom: minZoomRef.current, result: null }
+      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, minZoom: minZoomRef.current, anchorAgentId, result: null }
       return null
     }
     const padding = ANIM.viewportPadding
@@ -179,29 +238,20 @@ export function useCanvasCamera({
     const minZoom = minZoomRef.current
     if (minZoom > 0 && scale < minZoom) scale = minZoom
 
-    // Center the camera on the agent itself (main agent if present, otherwise
-    // any agent), instead of the bounding-box center. Keeps the node anchored
-    // in view as it moves and as bubbles/tools come and go.
+    // Anchor the camera on the chosen agent (decided in the pre-pass above).
+    // Falls back to the bounding-box center if no agent was eligible — only
+    // possible when minX === Infinity already returned above, so in practice
+    // anchorAgent is non-null whenever we reach this point.
     let anchorX = (minX + maxX) / 2
     let anchorY = (minY + maxY) / 2
-    let mainAgentX: number | null = null
-    let mainAgentY: number | null = null
-    let firstAgentX: number | null = null
-    let firstAgentY: number | null = null
-    for (const [, a] of agents) {
-      if (focusScope && !focusScope.has(a.id)) continue
-      if (firstAgentX === null) { firstAgentX = a.x; firstAgentY = a.y }
-      if (a.isMain) { mainAgentX = a.x; mainAgentY = a.y; break }
-    }
-    if (mainAgentX !== null && mainAgentY !== null) { anchorX = mainAgentX; anchorY = mainAgentY }
-    else if (firstAgentX !== null && firstAgentY !== null) { anchorX = firstAgentX; anchorY = firstAgentY }
+    if (anchorAgent !== null) { anchorX = anchorAgent.x; anchorY = anchorAgent.y }
 
     const result = {
       x: dimensions.width / 2 - anchorX * scale,
       y: dimensions.height / 2 - anchorY * scale,
       scale,
     }
-    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, minZoom: minZoomRef.current, result }
+    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, minZoom: minZoomRef.current, anchorAgentId, result }
     return result
   }, [getDescendantIds, drawPropsRef, simTimeRef])
 

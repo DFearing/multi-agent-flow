@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
-import { Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
+import { Particle, Edge, Discovery, DepthParticle, isActiveAgentState } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED, PERF_STRESS_MULTIPLIER } from '@/lib/canvas-constants'
@@ -367,7 +367,7 @@ export function AgentCanvas({
 
       let activeAgentPos: { x: number; y: number; color: string } | undefined
       for (const [, agent] of agents) {
-        if (agent.state === 'thinking' || agent.state === 'tool_calling' || agent.state === 'waiting_permission') {
+        if (isActiveAgentState(agent.state)) {
           activeAgentPos = { x: agent.x, y: agent.y, color: getStateColor(agent.state) }
           break
         }
