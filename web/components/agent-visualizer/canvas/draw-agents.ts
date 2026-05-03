@@ -19,31 +19,103 @@ function getOpenAILogoPath() {
   return _openaiLogoPath
 }
 
+// Pre-baked brand-spark sprite cache. shadowBlur on a per-frame fill is
+// among the slowest Canvas2D paths (Chrome forces an off-screen render
+// pass), so we render the spark + glow once into an off-screen canvas and
+// blit it via drawImage on subsequent frames.
+//
+// Cache structure: nested over the natural cardinality (brand × color ×
+// radius bucket) so the per-frame lookup is three small Map.get() calls
+// and zero allocations. A flat string-keyed Map forced a per-call
+// `${brand}|${color}|${rQ}|${dpr}` allocation that defeated V8's inlining
+// of the brand-spark path — the CPU profile showed it adding ~830ms self
+// time over a 90s window. dpr is captured at module scope; if it changes
+// we evict the cache and start fresh.
+const SPARK_BLUR_MARGIN = 12
+
+interface BrandSparkSprite {
+  canvas: HTMLCanvasElement
+  /** Logical (CSS-px) edge length of the rendered sprite. */
+  size: number
+}
+
+type BrandSparkBucket = Map<number, BrandSparkSprite>
+type BrandSparkColorMap = Map<string, BrandSparkBucket>
+const brandSparkCache: Record<'claude' | 'openai', BrandSparkColorMap> = {
+  claude: new Map(),
+  openai: new Map(),
+}
+let cachedDpr = -1
+
+function getBrandSparkSprite(
+  brand: 'claude' | 'openai',
+  color: string,
+  r: number,
+  dpr: number,
+): BrandSparkSprite {
+  if (dpr !== cachedDpr) {
+    brandSparkCache.claude.clear()
+    brandSparkCache.openai.clear()
+    cachedDpr = dpr
+  }
+  // r > 0 always in practice (agent radius); keep the floor as a guard.
+  // Bitwise OR truncates faster than Math.round for the small positive
+  // values seen here, and the +0.5 turns truncation into nearest-int.
+  const rQ = r < 1 ? 1 : (r + 0.5) | 0
+  const colorMap = brandSparkCache[brand]
+  let bucket = colorMap.get(color)
+  if (bucket === undefined) {
+    bucket = new Map()
+    colorMap.set(color, bucket)
+  }
+  const cached = bucket.get(rQ)
+  if (cached !== undefined) return cached
+
+  // Sprite covers the spark (visual extent ~ rQ * sparkScale * 2) plus a
+  // blur margin on every side so the glow doesn't clip at sprite edges.
+  const size = Math.ceil(rQ * AGENT_DRAW.sparkScale * 2 + SPARK_BLUR_MARGIN * 2)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.ceil(size * dpr)
+  canvas.height = Math.ceil(size * dpr)
+  const sctx = canvas.getContext('2d')!
+  sctx.scale(dpr, dpr)
+  sctx.translate(size / 2, size / 2)
+
+  if (brand === 'claude') {
+    const scale = (rQ * AGENT_DRAW.sparkScale) / AGENT_DRAW.sparkViewBox
+    sctx.scale(scale, scale)
+    sctx.translate(-AGENT_DRAW.sparkViewBox, -AGENT_DRAW.sparkViewBox + 1)
+    sctx.fillStyle = color
+    sctx.shadowColor = color
+    sctx.shadowBlur = 6 / scale
+    sctx.fill(getClaudeSparkPath())
+  } else {
+    const scale = (rQ * AGENT_DRAW.sparkScale) / OPENAI_LOGO_VIEWBOX
+    sctx.scale(scale, scale)
+    sctx.translate(-OPENAI_LOGO_VIEWBOX / 2, -OPENAI_LOGO_VIEWBOX / 2)
+    sctx.fillStyle = color
+    sctx.shadowColor = color
+    sctx.shadowBlur = 6 / scale
+    sctx.fill(getOpenAILogoPath())
+  }
+
+  const sprite: BrandSparkSprite = { canvas, size }
+  bucket.set(rQ, sprite)
+  return sprite
+}
+
+function getSpriteDpr(): number {
+  return typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
+}
+
 export function drawClaudeSpark(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, color: string) {
-  ctx.save()
-  ctx.translate(cx, cy)
-  const scale = (r * AGENT_DRAW.sparkScale) / AGENT_DRAW.sparkViewBox
-  ctx.scale(scale, scale)
-  ctx.translate(-AGENT_DRAW.sparkViewBox, -AGENT_DRAW.sparkViewBox + 1)
-  ctx.fillStyle = color
-  ctx.shadowColor = color
-  ctx.shadowBlur = 6 / scale
-  ctx.fill(getClaudeSparkPath())
-  ctx.restore()
+  const sprite = getBrandSparkSprite('claude', color, r, getSpriteDpr())
+  ctx.drawImage(sprite.canvas, cx - sprite.size / 2, cy - sprite.size / 2, sprite.size, sprite.size)
 }
 
 export function drawOpenAILogo(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, color: string) {
-  ctx.save()
-  ctx.translate(cx, cy)
-  // Target diameter matches the Claude spark: (r * sparkScale) total.
-  const scale = (r * AGENT_DRAW.sparkScale) / OPENAI_LOGO_VIEWBOX
-  ctx.scale(scale, scale)
-  ctx.translate(-OPENAI_LOGO_VIEWBOX / 2, -OPENAI_LOGO_VIEWBOX / 2)
-  ctx.fillStyle = color
-  ctx.shadowColor = color
-  ctx.shadowBlur = 6 / scale
-  ctx.fill(getOpenAILogoPath())
-  ctx.restore()
+  const sprite = getBrandSparkSprite('openai', color, r, getSpriteDpr())
+  ctx.drawImage(sprite.canvas, cx - sprite.size / 2, cy - sprite.size / 2, sprite.size, sprite.size)
 }
 
 /** Pick the brand logo for the agent's runtime. Defaults to Claude. */
