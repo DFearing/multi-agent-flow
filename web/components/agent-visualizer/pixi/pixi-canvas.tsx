@@ -16,7 +16,7 @@
  * Bloom post-processing is applied per-viewport as a stage-level filter.
  */
 
-import { useRef, useEffect, useState, useMemo, useId } from 'react'
+import { useRef, useEffect, useState, useMemo, useCallback, useId } from 'react'
 import { Container, EventBoundary } from 'pixi.js'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
@@ -166,6 +166,11 @@ export function PixiCanvas({
   const simTimeRef = useRef(0)
 
   // ─── DrawProps ref for camera + interaction hooks ───────────────────────
+  // IR-15: every dynamic value pixiDraw needs lives in this ref so the
+  // draw closure has zero React-prop captures and can be wrapped in a
+  // useCallback with empty deps. Without this, pixiDraw was reallocated
+  // on every parent render — and its identity flowed into the manager's
+  // registerRender effect, churning the registration pointer.
   const sim = simulationRef.current
   const drawPropsRef = useRef({
     agents: sim.agents,
@@ -173,6 +178,12 @@ export function PixiCanvas({
     discoveries: sim.discoveries,
     dimensions,
     selectedAgentId,
+    selectedToolCallId,
+    selectedDiscoveryId,
+    hoveredAgentId,
+    showStats,
+    showHexGrid,
+    effects,
     pauseAutoFit,
     isDragging: false,
     onAgentClick,
@@ -185,6 +196,12 @@ export function PixiCanvas({
 
   // Sync React props into drawPropsRef every render
   drawPropsRef.current.selectedAgentId = selectedAgentId
+  drawPropsRef.current.selectedToolCallId = selectedToolCallId
+  drawPropsRef.current.selectedDiscoveryId = selectedDiscoveryId
+  drawPropsRef.current.hoveredAgentId = hoveredAgentId
+  drawPropsRef.current.showStats = showStats
+  drawPropsRef.current.showHexGrid = showHexGrid
+  drawPropsRef.current.effects = effects
   drawPropsRef.current.pauseAutoFit = pauseAutoFit
   drawPropsRef.current.dimensions = dimensions
   drawPropsRef.current.onAgentClick = onAgentClick
@@ -230,11 +247,14 @@ export function PixiCanvas({
   updateDragLerpRef.current = updateDragLerp
 
   // ─── Draw callback (registered with shared render loop) ─────────────
-  // The render-loop registration reads through drawRef.current, so identity
-  // stability isn't observed downstream — useCallback would be pure overhead.
-  const drawRef = useRef<(timestamp: number) => void>(() => {})
-
-  const pixiDraw = (timestamp: number) => {
+  // IR-15: Every dynamic value flows through drawPropsRef so this closure
+  // has zero React-prop captures. Wrapping in useCallback with empty deps
+  // means the function identity stays stable for the component's lifetime,
+  // which lets the registerRender effect skip re-registering on each parent
+  // render. The eslint-disable is intentional — we are deliberately reading
+  // refs and stable handles inside a deps:[] callback.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const pixiDraw = useCallback((timestamp: number) => {
     if (!readyRef.current) return
 
     // Skip rendering when the canvas is off-screen (IntersectionObserver).
@@ -267,16 +287,16 @@ export function PixiCanvas({
     // Apply camera transform to the world container
     applyCameraTransform(world, transformRef.current)
 
-    // Update layers
+    // Update layers — every dynamic input is read through `p`.
     backgroundLayerRef.current?.update(
       p.dimensions.width,
       p.dimensions.height,
       transformRef.current,
       dt,
       timeRef.current,
-      showHexGrid,
+      p.showHexGrid,
       undefined,
-      effects.backgroundParticles,
+      p.effects.backgroundParticles,
     )
 
     edgesLayerRef.current?.update(
@@ -290,35 +310,35 @@ export function PixiCanvas({
     toolCallsLayerRef.current?.update(
       s.toolCalls,
       timeRef.current,
-      selectedToolCallId,
+      p.selectedToolCallId,
     )
 
     discoveriesLayerRef.current?.update(
       s.discoveries,
       s.agents,
-      selectedDiscoveryId,
+      p.selectedDiscoveryId,
     )
 
     agentsLayerRef.current?.update(
       s.agents,
-      selectedAgentId,
-      hoveredAgentId,
-      showStats,
+      p.selectedAgentId,
+      p.hoveredAgentId,
+      p.showStats,
       timeRef.current,
     )
 
     // Disabled-effect layers skip their update entirely and hide their
     // container — saves both the JS update cost and the GPU draw call.
     if (bubblesLayerRef.current) {
-      bubblesLayerRef.current.container.visible = effects.bubbles
-      if (effects.bubbles) {
+      bubblesLayerRef.current.container.visible = p.effects.bubbles
+      if (p.effects.bubbles) {
         bubblesLayerRef.current.update(s.agents, timeRef.current)
       }
     }
 
     if (particlesLayerRef.current) {
-      particlesLayerRef.current.container.visible = effects.particles
-      if (effects.particles) {
+      particlesLayerRef.current.container.visible = p.effects.particles
+      if (p.effects.particles) {
         particlesLayerRef.current.update(
           s.particles,
           s.edges,
@@ -331,15 +351,12 @@ export function PixiCanvas({
 
     // Render this viewport via the shared renderer and blit to the visible canvas
     renderViewport(viewportId)
-  }
-
-  drawRef.current = pixiDraw
+  }, [viewportId, simulationRef])
 
   // Register with the shared render loop.
   useEffect(() => {
-    const callback = (timestamp: number) => drawRef.current(timestamp)
-    return manager.registerRender(callback)
-  }, [manager])
+    return manager.registerRender(pixiDraw)
+  }, [manager, pixiDraw])
 
   // ─── Bootstrap (shared renderer + scene graph) ─────────────────────────
 
