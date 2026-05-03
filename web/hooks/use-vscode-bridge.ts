@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
+import { DEBUG_EVENTS, dlog } from '@/lib/debug-flag'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -153,10 +154,12 @@ export function useVSCodeBridge(): BridgeHookResult {
     // selectedSessionIdRef is updated synchronously (not via React state) so it's
     // always current even before React re-renders.
     const unsubEvent = bridge.onEvent((event: AgentEvent) => {
+      dlog('event', event.type, 'sid=', (event.sessionId ?? '').slice(0, 8), 'drop=', droppingRef.current, 'selected=', selectedSessionIdRef.current === event.sessionId)
       // Drop the relay's initial backlog. Each event resets the idle timer;
       // once IDLE_FLUSH_MS passes quietly, the backlog has finished arriving
       // and we exit drop mode for normal live handling.
       if (droppingRef.current) {
+        dlog('  dropped (warmup)')
         if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
         idleTimerRef.current = setTimeout(() => exitDropRef.current(), IDLE_FLUSH_MS)
         return
@@ -174,6 +177,7 @@ export function useVSCodeBridge(): BridgeHookResult {
         const buf = sessionEventsRef.current.get(event.sessionId) || []
         buf.push(simEvent)
         sessionEventsRef.current.set(event.sessionId, buf)
+        dlog('  buffered, log size now', buf.length)
       }
 
       // Deliver to pending if session matches (ref is always current).
@@ -184,7 +188,11 @@ export function useVSCodeBridge(): BridgeHookResult {
         pendingEventsRef.current.push(simEvent)
       } else if (event.sessionId && event.sessionId !== selected) {
         setSessionsWithActivity(prev => {
-          if (prev.has(event.sessionId!)) return prev
+          if (prev.has(event.sessionId!)) {
+            dlog('  sessionsWithActivity DEDUP (already had id)')
+            return prev
+          }
+          dlog('  sessionsWithActivity ADD')
           const next = new Set(prev)
           next.add(event.sessionId!)
           return next
@@ -196,6 +204,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       if (!rafPendingRef.current) {
         rafPendingRef.current = true
         rafIdRef.current = requestAnimationFrame(() => {
+          dlog('  rAF eventVersion bump')
           rafPendingRef.current = false
           rafIdRef.current = null
           setEventVersion(v => v + 1)
@@ -204,6 +213,7 @@ export function useVSCodeBridge(): BridgeHookResult {
 
       // Re-add dismissed sessions when new events arrive
       if (event.sessionId && dismissedSessionsRef.current.has(event.sessionId)) {
+        dlog('  dismissed-session re-add for', event.sessionId.slice(0, 8))
         const saved = dismissedSessionsRef.current.get(event.sessionId)
         dismissedSessionsRef.current.delete(event.sessionId)
         if (saved) {
@@ -335,6 +345,7 @@ export function useVSCodeBridge(): BridgeHookResult {
   /** Flush buffered events for the selected session into pending.
    *  Must be called from useLayoutEffect AFTER simulation state is saved/swapped. */
   const flushSessionEvents = useCallback((sessionId: string, fromIndex = 0) => {
+    dlog('flushSessionEvents', sessionId.slice(0, 8), 'buffered=', (sessionEventsRef.current.get(sessionId)?.length ?? 0), 'fromIndex=', fromIndex)
     sessionSwitchPendingRef.current = false
     const buffered = sessionEventsRef.current.get(sessionId) || []
     pendingEventsRef.current.length = 0
