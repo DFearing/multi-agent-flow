@@ -127,15 +127,40 @@ Outputs land in `bench/results/long-tasks-{summary,profile,report}{,-no-bloom,-t
 
 - **21.4% in `(program)`** — V8's catch-all bucket. Almost certainly some mix of GC pauses, deoptimizations, and JIT compile/parse. To attribute, a future pass needs CDP `Tracing.start` with `disabled-by-default-v8.cpu_profiler` + `v8.runtime` categories (much more invasive than `Profiler.start`). Filing as a follow-up rather than a third hot-path issue because there's no actionable code change yet.
 
+## Stabilization (multi-rep + variance detection)
+
+Run-to-run FPS variance was observed at 6.4–12.8 on identical code at 4× CPU throttle, and `(program)` time fluctuated 22–30%, because background system activity bleeds into the measurement. Three mitigations were added:
+
+### 1. Multi-rep with median (`--reps=N`)
+
+The `--reps=N` flag (default 1 for backward compat, recommended 5) runs the warmup-and-measurement cycle N times back-to-back in the same browser session. Outputs include per-rep summaries (`long-tasks-summary-rep1.json` ... `long-tasks-summary-repN.json`) and an aggregated summary with median, mean, min, max, and stdDev for each metric. The CPU profile is captured for the best (highest FPS) rep only.
+
+### 2. Variance flagging (CoV threshold)
+
+The aggregated summary and terminal output include the coefficient of variation (`stdDev / mean`) for FPS. If CoV > 15%, a loud warning is printed. The JSON includes `variance: { cov, noisy }`.
+
+### 3. CPU governor helper (`bench/scripts/bench-prep.sh`)
+
+A bash script that reports CPU model, governor, frequency range, load average, and free memory. With `--set-performance`, it locks the governor to `performance` (via `cpupower` or sysfs fallback). With `--restore`, it reverts. The governor and system state are also embedded in the aggregated JSON output.
+
+### Recommended workflow
+
+```bash
+./bench/scripts/bench-prep.sh --set-performance
+node bench/profile-long-tasks.mjs --reps=5
+./bench/scripts/bench-prep.sh --restore
+```
+
 ## How to reproduce
 
 ```bash
 cd source
 pnpm run build:app
 cd bench && pnpm install --ignore-workspace && pnpx playwright install chromium
-node profile-long-tasks.mjs                  # 30s warmup + 90s measure, 4× throttle
+node profile-long-tasks.mjs                  # 30s warmup + 90s measure, 4x throttle
+node profile-long-tasks.mjs --reps=5         # 5 reps with variance reporting
 node profile-long-tasks.mjs --smoke          # quick verify (15s + 30s)
 node breakdown-by-caller.mjs results/long-tasks-profile.cpuprofile drawImage
 ```
 
-Outputs land in `bench/results/long-tasks-*.{cpuprofile,md,json}`. The `.cpuprofile` opens directly in Chrome DevTools → Performance → Load profile.
+Outputs land in `bench/results/long-tasks-*.{cpuprofile,md,json}`. The `.cpuprofile` opens directly in Chrome DevTools -> Performance -> Load profile.

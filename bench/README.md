@@ -85,10 +85,107 @@ Flags:
 - `results/runs.jsonl` — one line per run with raw metrics + CDP snapshot
 - `results/summary.md` — aggregated comparison table + deltas
 
+## Long-task profiler (`profile-long-tasks.mjs`)
+
+Single-stack CPU profile + long-task capture at 4× CPU throttle.
+Produces a DevTools-loadable `.cpuprofile`, a parsed hot-path report,
+and a JSON summary.
+
+```bash
+# Default: 1 rep, 30s warmup + 90s measurement, 4× throttle
+node bench/profile-long-tasks.mjs
+
+# Multi-rep with variance reporting (recommended)
+node bench/profile-long-tasks.mjs --reps=5
+
+# Quick verify
+node bench/profile-long-tasks.mjs --smoke
+
+# Without bloom
+node bench/profile-long-tasks.mjs --no-bloom
+
+# Bloom throttle
+node bench/profile-long-tasks.mjs --bloom-throttle=2
+
+# Custom timing
+node bench/profile-long-tasks.mjs --warmup=10 --measure=15
+
+# No CPU throttle
+node bench/profile-long-tasks.mjs --no-throttle
+```
+
+Flags:
+- `--reps=N` — run N reps back-to-back (default `1`). With N>1, writes per-rep
+  summaries (`*-rep1.json` ... `*-repN.json`) and an aggregated summary with
+  median/mean/min/max/stdDev for each metric. CPU profile is from the best
+  (highest FPS) rep.
+- `--smoke` — 15s warmup + 30s measurement
+- `--no-bloom` — disable the Canvas2D bloom pass
+- `--bloom-throttle=N` — bloom every Nth frame
+- `--warmup=S` — warmup in seconds
+- `--measure=S` — measurement in seconds
+- `--no-throttle` — disable CPU throttle (1×)
+
+### Variance reporting
+
+When `--reps=N` is used with N>1, the harness computes the coefficient of
+variation (CoV = stdDev/mean) for FPS. If CoV exceeds 15%, a warning is
+printed:
+
+```
+⚠ HIGH VARIANCE — CoV=18.2% (threshold: 15%)
+System load may be interfering. Consider closing other apps and rerunning.
+```
+
+The aggregated JSON includes `variance: { cov, noisy }` for programmatic
+consumption.
+
+### Aggregated summary JSON shape (with --reps=N)
+
+```json
+{
+  "meta": { "commit", "throttle", "warmupMs", "measureMs", "simCount", "bloom", "bloomThrottle", "reps", "bestRep" },
+  "system": { "cpuModel", "governor", "loadavg1m", "freeMemMB" },
+  "variance": { "cov": 0.042, "noisy": false },
+  "fps": { "median", "mean", "min", "max", "stdDev", "values": [...] },
+  "frameMs": { "mean": { ... }, "p50": { ... }, "p95": { ... }, "p99": { ... } },
+  "longTasks": { "totalMs": { ... }, "count": { ... }, "maxMs": { ... } },
+  "reactCommits": { "median", "mean", "min", "max", "stdDev", "values": [...] },
+  "scriptingMs": { "median", "mean", "min", "max", "stdDev", "values": [...] }
+}
+```
+
+## CPU governor helper (`bench/scripts/bench-prep.sh`)
+
+Optional helper that reports system state and can lock the CPU governor to
+`performance` mode for reduced variance. Requires `sudo` for governor changes.
+
+```bash
+# Report current system state (no sudo needed)
+./bench/scripts/bench-prep.sh
+
+# Lock to performance governor (requires sudo)
+./bench/scripts/bench-prep.sh --set-performance
+
+# Restore original governor
+./bench/scripts/bench-prep.sh --restore
+```
+
+### Recommended stable-bench workflow
+
+```bash
+./bench/scripts/bench-prep.sh --set-performance
+node bench/profile-long-tasks.mjs --reps=5
+./bench/scripts/bench-prep.sh --restore
+```
+
 ## Caveats
 
 - **Single-machine, real CPU.** Other workloads on the host will inflate frame
   times — keep the box quiet during a run, especially for unthrottled (1×) cells.
+  Use `--reps=5` and check the CoV to detect noisy runs.
+- **CPU governor matters.** The `powersave` governor lets the OS scale frequency
+  dynamically, adding variance. Use `bench-prep.sh --set-performance` to lock it.
 - **The simulator only exists on HEAD.** It produces JSONL events the relay
   consumes; that input is identical across stacks.
 - **Production builds, not `next dev`.** `pnpm run build:app` produces a single
